@@ -8,9 +8,9 @@ let run _ =
     | `Await ->
       let len = input stdin raw 0 (Bytes.length raw) in
       Z.M.src decoder raw 0 len ; go ()
-    | `Flush _o ->
-      let _len = 0x800 - Z.M.dst_rem decoder in
-      (* output stdout o 0 len ; *) Z.M.flush decoder ; go ()
+    | `Flush o ->
+      let len = 0x800 - Z.M.dst_rem decoder in
+      output stdout o 0 len ; Z.M.flush decoder ; go ()
     | `Continuation -> go ()
     | `Malformed err ->
       Fmt.epr "%s.\n%!" err ; `Error err
