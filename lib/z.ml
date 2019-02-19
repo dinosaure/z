@@ -1,8 +1,16 @@
-let unsafe_get_uint8 _ _ = assert false
-let unsafe_set_uint8 _ _ _ = ()
-let invalid_bounds _ _ = assert false
-let blit _ _ _ _ _ = ()
-let blit2 _ _ _ _ _ _ _ = ()
+let () = Printexc.record_backtrace true
+
+let unsafe_get_uint8 buf off = Char.code (Bytes.unsafe_get buf off)
+
+let unsafe_set_uint8 buf off v = Bytes.unsafe_set buf off (Char.unsafe_chr v)
+
+let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
+
+let blit2 src src_off dst0 dst0_off dst1 dst1_off len =
+  for i = 0 to len - 1 do
+    unsafe_set_uint8 dst0 (dst0_off + i) (unsafe_get_uint8 src (src_off + i)) ;
+    unsafe_set_uint8 dst1 (dst1_off + i) (unsafe_get_uint8 src (src_off + i))
+  done
 
 let io_buffer_size = 65536
 
@@ -12,6 +20,8 @@ let (//) x y =
 [@@inline]
 
 let min (a : int) b = min a b
+
+(* XXX(dinosaure): optimize [Heap]. *)
 
 module Heap = struct
   type priority = int
@@ -39,6 +49,12 @@ module Heap = struct
   let take = function
     | None -> raise Empty
     | Node (p, e, _, _) as queue -> (p, e, remove queue)
+
+  let rec pp pp_data ppf = function
+    | None -> Fmt.string ppf "<none>"
+    | Node (p, e, l, r) ->
+      Fmt.pr "(Node (priority: %d, e: %a, l: %a, r: %a))"
+        p pp_data e (Fmt.hvbox (pp pp_data)) l (Fmt.hvbox (pp pp_data)) r
 end
 
 module Lookup = struct
@@ -134,7 +150,7 @@ module M = struct
           aux (if incr <> 0 then (huff land (incr - 1)) + incr else 0) heap
       | exception Heap.Empty -> ()
     in
-    aux 0 heap ; tbl
+    aux 0 heap ; Fmt.epr "tbl: @[<hov>%a@].\n%!" Fmt.(Dump.array int) tbl ; tbl
 
   let huffman table off codes =
     let bl_count = Array.make 16 0 in
@@ -163,6 +179,7 @@ module M = struct
         ordered := Heap.push !ordered n (l, i) ;
         max := if l > !max then l else !max )
     done ;
+    Fmt.epr "max: %d.\n%!" !max ;
     (prefix !ordered !max, !max)
 
   type decoder =
@@ -251,7 +268,7 @@ module M = struct
           d.i_pos <- d.i_pos + 1
         ; d.hold <- d.hold lor (byte lsl d.bits)
         ; d.bits <- d.bits + 8
-        ; k d )
+        ; if d.bits >= n then k d else c_peek_bits n k d )
 
   [@@@warning "-26-27"]
 
@@ -292,28 +309,28 @@ module M = struct
         | Length ->
           if !bits < lit.Lookup.l
           then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
-              ; bits := !bits + 8
-              ; incr i_pos
-              ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
-              ; bits := !bits + 8
-              ; incr i_pos ) ;
+               ; bits := !bits + 8
+               ; incr i_pos
+               ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+               ; bits := !bits + 8
+               ; incr i_pos ) ;
           let len, value = Lookup.get lit (!hold land lit.Lookup.m) in
           hold := !hold lsr len ;
           bits := !bits - len ;
           if value < 256
           then ( unsafe_set_uint8 d.o !o_pos value
-              ; Window.add d.w value
-              ; incr o_pos
-              (* ; jump := Length *) )
-          else if value = 256 then raise End
+               ; Window.add d.w value
+               ; incr o_pos
+               (* ; jump := Length *) )
+          else if value == 256 then raise End
           else ( jump := Extra_length
-              ; d.l <- value )
+               ; d.l <- value - 257 )
         | Extra_length ->
           let len = extra_lbits.(d.l) in
           if !bits < len
           then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
-              ; bits := !bits + 8
-              ; incr i_pos ) ;
+               ; bits := !bits + 8
+               ; incr i_pos ) ;
           let extra = !hold land ((1 lsl len) - 1) in
           hold := !hold lsr len ;
           bits := !bits - len ;
@@ -336,11 +353,11 @@ module M = struct
           let len = extra_dbits.(d.d) in
           if !bits < len
           then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
-              ; bits := !bits + 8
-              ; incr i_pos
-              ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
-              ; bits := !bits + 8
-              ; incr i_pos ) ;
+               ; bits := !bits + 8
+               ; incr i_pos
+               ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+               ; bits := !bits + 8
+               ; incr i_pos ) ;
           let extra = !hold land ((1 lsl len) - 1) in
           hold := !hold lsr len ;
           bits := !bits - len ;
@@ -353,7 +370,7 @@ module M = struct
           let rst = len - pre in
           if rst > 0
           then ( Window.blit d.w d.w.Window.raw off d.o !o_pos pre
-              ; Window.blit d.w d.w.Window.raw 0 d.o (!o_pos + pre) rst )
+               ; Window.blit d.w d.w.Window.raw 0 d.o (!o_pos + pre) rst )
           else Window.blit d.w d.w.Window.raw off d.o !o_pos len ;
           o_pos := !o_pos + len ;
           if d.l - len == 0 then jump := Length else d.l <- d.l - len
@@ -364,6 +381,9 @@ module M = struct
       d.i_pos <- !i_pos ;
       d.o_pos <- !o_pos ;
       d.s <- Inflate { lit; dist; jump= !jump } ;
+
+      Fmt.epr "i_pos: %d, o_pos: %d (o_len: %d), rem: %d.\n%!" d.i_pos d.o_pos (Bytes.length d.o) (i_rem d) ;
+
       if i_rem d > 0 then `Flush d.o else `Await
     with End ->
       d.hold <- !hold ;
@@ -378,9 +398,83 @@ module M = struct
       else ( d.s <- Header
            ; `Continuation )
 
+  let rec c_put_byte byte k d =
+    if d.o_pos < Bytes.length d.o
+    then ( unsafe_set_uint8 d.o d.o_pos byte
+         ; Window.add d.w byte
+         ; d.o_pos <- d.o_pos + 1
+         ; k d )
+    else ( d.k <- c_put_byte byte k
+         ; `Flush d.o )
+
+  let slow_inflate lit dist jump d =
+    match jump with
+    | Length ->
+      let k d =
+        let len, value = Lookup.get lit (d.hold land lit.Lookup.m) in
+        d.hold <- d.hold lsr len ;
+        d.bits <- d.bits - len ;
+
+        if value < 256
+        then
+          let k d =
+            d.s <- Inflate { lit; dist; jump= Length } ;
+            `Continuation in
+          c_put_byte value k d
+        else if value == 256 then assert false
+        else ( d.l <- value - 257
+             ; d.s <- Inflate { lit; dist; jump= Extra_length }
+             ; `Continuation ) in
+      c_peek_bits lit.Lookup.l k d
+    | Extra_length ->
+      let len = extra_lbits.(d.l) in
+      let k d =
+        let extra = d.hold land ((1 lsl len) - 1) in
+        d.hold <- d.hold lsr len ;
+        d.bits <- d.bits - len ;
+        d.l <- base_length.(d.l) + 3 + extra ;
+        d.s <- Inflate { lit; dist; jump= Distance } ;
+        `Continuation in
+      c_peek_bits len k d
+    | Distance ->
+      let k d =
+        let len, value = Lookup.get dist (d.hold land dist.Lookup.m) in
+        d.hold <- d.hold lsr len ;
+        d.bits <- d.bits - len ;
+        d.d <- value ;
+        d.s <- Inflate { lit; dist; jump= Extra_distance } ;
+        `Continuation in
+      c_peek_bits dist.Lookup.l k d
+    | Extra_distance ->
+      let len = extra_dbits.(d.d) in
+      let k d =
+        let extra = d.hold land ((1 lsl len) - 1) in
+        d.hold <- d.hold lsr len ;
+        d.bits <- d.bits - len ;
+        d.d <- base_dist.(d.d) + 1 + extra ;
+        d.s <- Inflate { lit; dist; jump= Write } ;
+        `Continuation in
+      c_peek_bits len k d
+    | Write ->
+      let len = min d.l (Bytes.length d.o - d.o_pos) in
+      let off = (Window.mask [@inlined]) (d.w.Window.w - d.d) in
+      let pre = Window.max - off in
+      let rst = len - pre in
+      if rst > 0
+      then ( Window.blit d.w d.w.Window.raw off d.o d.o_pos pre
+           ; Window.blit d.w d.w.Window.raw 0 d.o (d.o_pos + pre) rst )
+      else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
+      d.o_pos <- d.o_pos + len ;
+      if d.l - len == 0
+      then ( d.s <- Inflate { lit; dist; jump= Length }
+           ; `Continuation )
+      else ( d.l <- d.l - len
+           ; d.s <- Inflate { lit; dist; jump= Write }
+           ; `Continuation )
+
   let make_table t hlit hdist d =
-    let t_lit, l_lit = huffman t 0 15 in
-    let t_dist, l_dist = huffman t hlit 15 in
+    let t_lit, l_lit = huffman t 0 hlit in
+    let t_dist, l_dist = huffman t hlit hdist in
 
     let lit = Lookup.make t_lit l_lit in
     let dist = Lookup.make t_dist l_dist in
@@ -388,8 +482,9 @@ module M = struct
     inflate lit dist Length d
 
   let inflate_table d =
-    let[@warning "-8"] Inflate_table { t; l= max; r; h= (hlit, hdist, _) } = d.s in
-    let mask = (1 lsl max) - 1 in
+    let[@warning "-8"] Inflate_table { t; l= max_bits; r= res; h= (hlit, hdist, _) } = d.s in
+    let max_res = hlit + hdist in
+    let mask = (1 lsl max_bits) - 1 in
     let get k d =
       let len, v =
         t.(d.hold land mask) lsr 15,
@@ -397,7 +492,7 @@ module M = struct
       d.hold <- d.hold lsr len ;
       d.bits <- d.bits - len ;
       k v d in
-    let get k d = c_peek_bits max (get k) d in
+    let get k d = c_peek_bits max_bits (get k) d in
     let get_bits n k d =
       let k d =
         let v = d.hold land ((1 lsl n) - 1) in
@@ -409,36 +504,37 @@ module M = struct
     (* XXX(dinosaure): [prv] and [i] are stored as associated env of [go]. We
        can not retake them from [d.s]. *)
     let rec go ?prv i v d =
+      Fmt.epr "Inflate table: %02x.\n%!" v ;
       match v with
       | 16 ->
         let k n d =
-          if i + n + 3 > max then err_invalid_dictionary d
+          if i + n + 3 > max_res then err_invalid_dictionary d
           else match prv with
             | Some prv ->
-              for j = 0 to n + 3 - 1 do r.(i + j) <- prv done ;
-              if i + n + 3 < max then get (go (i + n + 3)) d else ret r d
+              for j = 0 to n + 3 - 1 do res.(i + j) <- prv done ;
+              if i + n + 3 < max_res then get (go (i + n + 3)) d else ret res d
             | None -> err_invalid_dictionary d in
         get_bits 2 k d
       | 17 ->
         let k n d =
-          if i + n + 3 > max then err_invalid_dictionary d
+          if i + n + 3 > max_res then err_invalid_dictionary d
           else
-            (if i + n + 3 < max then get (go (i + n + 3)) d else ret r d) in
+            (if i + n + 3 < max_res then get (go (i + n + 3)) d else ret res d) in
         get_bits 3 k d
       | 18 ->
         let k n d =
-          if i + n + 11 > max then err_invalid_dictionary d
+          if i + n + 11 > max_res then err_invalid_dictionary d
           else
-            (if i + n + 11 < max then get (go (i + n + 11)) d else ret r d) in
+            (if i + n + 11 < max_res then get (go (i + n + 11)) d else ret res d) in
         get_bits 7 k d
       | n ->
         if n < 16
         then
-          ( r.(i) <- n
-          ; if i + 1 < max
+          ( res.(i) <- n
+          ; if i + 1 < max_res
             (* XXX(dinosaure): [prv] is the last [n < 16] or the last [v]? *)
             then get (go ~prv:n (i + 1)) d
-            else ret r d )
+            else ret res d )
         else err_invalid_dictionary d in
     let k v d = go 0 v d in
     get k d
@@ -462,6 +558,8 @@ module M = struct
       incr i ;
     done ;
 
+    Fmt.epr "res: @[<hov>%a@].\n%!" Fmt.(Dump.array int) res ;
+
     let t, l = huffman res 0 19 in
 
     d.hold <- !hold ;
@@ -477,10 +575,13 @@ module M = struct
       let hdist = ((d.hold land 0x3e0) lsr 5) + 1 in
       let hclen = ((d.hold land 0x3c00) lsr 10) + 4 in
 
+      Fmt.epr "hlit: %d, hdist: %d, hclen: %d.\n%!"
+        hlit hdist hclen ;
+
       d.s <- Table { hlit; hdist; hclen; } ;
       d.hold <- d.hold lsr 14 ;
       d.bits <- d.bits - 14 ;
-      assert (d.bits < 7) ; (* XXX(dinosaure): we need, at most, 57 bits. *)
+      assert (d.bits < 64 - (hclen * 3)) ; (* XXX(dinosaure): TODO! *)
       c_peek_bits (hclen * 3) table d in
     c_peek_bits 14 l_header d
 
@@ -495,6 +596,7 @@ module M = struct
           | 2 -> dynamic
           | 3 -> err_invalid_kind_of_block
           | _ -> assert false in
+        Fmt.epr "kind: %d, last: %b.\n%!" ((d.hold land 0x6) lsr 1) last ;
         d.last <- last ;
         d.hold <- d.hold lsr 3 ;
         d.bits <- d.bits - 3 ;
@@ -502,10 +604,14 @@ module M = struct
       c_peek_bits 3 l_header d
     | Table { hclen; _ } -> c_peek_bits (hclen * 3) table d
     | Inflate_table _ -> d.k d
-    | Inflate { lit; dist; jump; } -> inflate lit dist jump d
+    | Inflate { lit; dist; jump; } ->
+      if i_rem d > 1
+      then inflate lit dist jump d
+      else slow_inflate lit dist jump d
     | Checkseum v -> checkseum v d
 
   let dst_rem d = Bytes.length d.o - d.o_pos
+  let flush d = d.o_pos <- 0
 
   let decoder src len =
     let i, i_pos, i_len = match src with
