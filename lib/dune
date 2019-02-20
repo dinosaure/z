@@ -1,4 +1,3 @@
 (library
  (name z)
- (libraries fmt landmarks checkseum)
- (preprocess (pps landmarks.ppx --auto)))
+ (libraries fmt checkseum))
