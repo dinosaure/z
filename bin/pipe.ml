@@ -2,16 +2,16 @@ let zlib_header = Bytes.create 2
 
 let run _ =
   let[@warning "-8"] 2 = input stdin zlib_header 0 2 in
-  let decoder = Z.M.decoder `Manual 0x800 in
+  let o = Bytes.create 0x800 in
+  let decoder = Z.M.decoder `Manual o in
   let raw = Bytes.create 0x800 in
   let rec go () = match Z.M.decode decoder with
     | `Await ->
       let len = input stdin raw 0 (Bytes.length raw) in
       Z.M.src decoder raw 0 len ; go ()
-    | `Flush o ->
+    | `Flush ->
       let len = 0x800 - Z.M.dst_rem decoder in
       output stdout o 0 len ; Z.M.flush decoder ; go ()
-    | `Continuation -> go ()
     | `Malformed err ->
       Fmt.epr "%s.\n%!" err ; `Error err
     | `End -> `Ok () in
