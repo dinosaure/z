@@ -18,10 +18,9 @@ main(int argc, const char **argv)
   if (fh != NULL)
     {
       fseek(fh, 0L, SEEK_END);
-      long i_len = ftell(fh) - 2;
-      long o_len = i_len * 4; // XXX(dinosaure): lol!
+      long i_len = ftell(fh);
+      long o_len = i_len * 100; // XXX(dinosaure): lol!
       rewind(fh);
-      fseek(fh, 2L, SEEK_SET); // zlib header, TODO
 
       i = malloc(i_len);
       o = malloc(o_len);

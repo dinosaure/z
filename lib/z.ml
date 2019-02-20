@@ -54,7 +54,7 @@ module Heap = struct
   let rec pp pp_data ppf = function
     | None -> Fmt.string ppf "<none>"
     | Node (p, e, l, r) ->
-      Fmt.pr "(Node (priority: %d, e: %a, l: %a, r: %a))"
+      Fmt.pf ppf "(Node (priority: %d, e: %a, l: %a, r: %a))"
         p pp_data e (Fmt.hvbox (pp pp_data)) l (Fmt.hvbox (pp pp_data)) r
 end
 
@@ -64,10 +64,15 @@ module Lookup = struct
     ; m : int
     ; l : int }
 
+  let mask = (1 lsl 15) - 1
   let make t m = { t; m= (1 lsl m) - 1; l= m }
 
   let get t i =
-    let v = t.t.(i) in v lsr 15, v land t.m
+    let v = t.t.(i) in v lsr 15, v land mask
+
+  let pp ppf t =
+    Fmt.pf ppf "{ @[<hov>t = @[<hov>%a@];@ m = %x;@ l = %d;@] }"
+      Fmt.(Dump.array int) t.t t.m t.l
 end
 
 module Window = struct
@@ -207,6 +212,13 @@ module M = struct
     | End_of_inflate
   and jump = Length | Extra_length | Distance | Extra_distance | Write
   and ret = Await | Flush | End | K | Malformed of string
+
+  let pp_jump ppf = function
+    | Length -> Fmt.string ppf "length"
+    | Extra_length -> Fmt.string ppf "extra-length"
+    | Distance -> Fmt.string ppf "distance"
+    | Extra_distance -> Fmt.string ppf "extra-distance"
+    | Write -> Fmt.string ppf "write"
 
   let malformedf fmt = Fmt.kstrf (fun s -> Malformed s) fmt
 
@@ -491,7 +503,7 @@ module M = struct
            ; K )
       else ( d.l <- d.l - len
            ; d.s <- Inflate { lit; dist; jump= Write }
-           ; K )
+           ; Flush )
 
   exception End
 
@@ -606,6 +618,7 @@ module M = struct
 
     let lit = Lookup.make t_lit l_lit in
     let dist = Lookup.make t_dist l_dist in
+
     d.s <- Inflate { lit; dist; jump= Length };
     inflate lit dist Length d
 
