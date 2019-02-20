@@ -202,6 +202,9 @@ module M = struct
     ; mutable o_pos : int
     ; mutable l : int (* literal / length *)
     ; mutable d : int (* distance *)
+    ; mutable literal : Lookup.t
+    ; mutable distance : Lookup.t
+    ; mutable jump : jump
     ; w : Window.t
     ; mutable s : state
     ; mutable k : decoder -> ret }
@@ -214,9 +217,7 @@ module M = struct
                        ; l : int
                        ; r : int array
                        ; h : int * int * int }
-    | Inflate of { lit : Lookup.t
-                 ; dist : Lookup.t
-                 ; jump : jump }
+    | Inflate
     | Slow
     | Flat
     | Checkseum
@@ -457,7 +458,7 @@ module M = struct
         if value < 256
         then
           let k d =
-            d.s <- Inflate { lit; dist; jump= Length } ; (* allocation *)
+            d.s <- Inflate ; (* allocation *)
             K in
           c_put_byte value k d
         else if value == 256
@@ -465,7 +466,7 @@ module M = struct
                then ( d.s <- Checkseum ; checksum d )
                else ( d.s <- Header ; K ) )
         else ( d.l <- value - 257
-             ; d.s <- Inflate { lit; dist; jump= Extra_length } (* allocation *)
+             ; d.s <- Inflate (* allocation *)
              ; K ) in
       c_peek_bits lit.Lookup.l k d
     | Extra_length ->
@@ -475,7 +476,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.l <- base_length.(d.l) + 3 + extra ;
-        d.s <- Inflate { lit; dist; jump= Distance } ; (* allocation *)
+        d.s <- Inflate ; (* allocation *)
         K in
       c_peek_bits len k d
     | Distance ->
@@ -484,7 +485,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- value ;
-        d.s <- Inflate { lit; dist; jump= Extra_distance } ; (* allocation *)
+        d.s <- Inflate ; (* allocation *)
         K in
       c_peek_bits dist.Lookup.l k d
     | Extra_distance ->
@@ -494,7 +495,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- base_dist.(d.d) + 1 + extra ;
-        d.s <- Inflate { lit; dist; jump= Write } ; (* allocation *)
+        d.s <- Inflate ; (* allocation *)
         K in
       c_peek_bits len k d
     | Write ->
@@ -508,10 +509,10 @@ module M = struct
       else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
       d.o_pos <- d.o_pos + len ;
       if d.l - len == 0
-      then ( d.s <- Inflate { lit; dist; jump= Length } (* allocation *)
+      then ( d.s <- Inflate (* allocation *)
            ; K )
       else ( d.l <- d.l - len
-           ; d.s <- Inflate { lit; dist; jump= Write } (* allocation *)
+           ; d.s <- Inflate (* allocation *)
            ; Flush )
 
   exception End
@@ -600,6 +601,7 @@ module M = struct
       d.bits <- !bits ;
       d.i_pos <- !i_pos ;
       d.o_pos <- !o_pos ;
+      d.jump <- !jump ;
       d.k <- slow_inflate lit dist !jump ; (* allocation *)
       d.s <- Slow ;
 
@@ -618,7 +620,10 @@ module M = struct
 
   let fixed d =
     let lit, dist = fixed_lit, fixed_dist in
-    d.s <- Inflate { lit; dist; jump= Length }; (* allocation *)
+    d.literal <- lit ;
+    d.distance <- dist ;
+    d.jump <- Length ;
+    d.s <- Inflate ; (* allocation *)
     inflate lit dist Length d
 
   let make_table t hlit hdist d =
@@ -628,7 +633,10 @@ module M = struct
     let lit = Lookup.make t_lit l_lit in
     let dist = Lookup.make t_dist l_dist in
 
-    d.s <- Inflate { lit; dist; jump= Length }; (* allocation *)
+    d.literal <- lit ;
+    d.distance <- dist ;
+    d.jump <- Length ;
+    d.s <- Inflate ; (* allocation *)
     inflate lit dist Length d
 
   let inflate_table d =
@@ -744,10 +752,10 @@ module M = struct
       c_peek_bits 3 l_header d
     | Table { hclen; _ } -> c_peek_bits (hclen * 3) table d
     | Inflate_table _ -> d.k d
-    | Inflate { lit; dist; jump; } ->
+    | Inflate ->
       if i_rem d > 1
-      then inflate lit dist jump d
-      else slow_inflate lit dist jump d
+      then inflate d.literal d.distance d.jump d
+      else slow_inflate d.literal d.distance d.jump d
     | Slow -> d.k d
     | Flat -> flat d
     | Checkseum -> checksum d
@@ -778,6 +786,9 @@ module M = struct
     ; last= false
     ; l= 0
     ; d= 0
+    ; literal= fixed_lit
+    ; distance= fixed_dist
+    ; jump= Length
     ; w= Window.from w
     ; s= Header
     ; k= decode_k }
