@@ -75,7 +75,7 @@ module Lookup = struct
   let make t m = { t; m= (1 lsl m) - 1; l= m }
 
   let get t i =
-    let v = t.t.(i) in v lsr 15, v land mask
+    let v = t.t.(i) in v lsr 15, v land mask (* allocation *)
   [@@inline]
 
   let pp ppf t =
@@ -142,7 +142,7 @@ module M = struct
   exception Invalid_huffman
 
   let prefix heap max =
-    assert (max < 16) ;
+    assert (max < 16) ; (* allocation *)
     let tbl = Array.make (1 lsl max) 0 in
     let rec backward huff incr =
       if huff land incr <> 0 then backward huff (incr lsr 1) else incr
@@ -157,7 +157,7 @@ module M = struct
           let decr = 1 lsl len in
           loop decr ((1 lsl max) - decr) ;
           let incr = backward huff (1 lsl (len - 1)) in
-          aux (if incr <> 0 then (huff land (incr - 1)) + incr else 0) heap
+          aux (if incr != 0 then (huff land (incr - 1)) + incr else 0) heap
       | exception Heap.Empty -> ()
     in
     aux 0 heap ; tbl
@@ -186,9 +186,9 @@ module M = struct
       if l <> 0 then (
         let n = next_code.(l - 1) in
         next_code.(l - 1) <- n + 1 ;
-        ordered := Heap.push !ordered n (l, i) ;
+        ordered := Heap.push !ordered n (l, i) ; (* allocation *)
         max := if l > !max then l else !max )
-    done ; (prefix !ordered !max, !max)
+    done ; (prefix !ordered !max, !max) (* allocation *)
 
   type decoder =
     { src : src
@@ -288,7 +288,7 @@ module M = struct
       then
         if rem < 0 (* end of input *)
         then err_unexpected_end_of_input d
-        else refill (c_peek_bits n k) d
+        else refill (c_peek_bits n k) d (* allocation *)
       else
         ( let byte = unsafe_get_uint8 d.i d.i_pos in
           d.i_pos <- d.i_pos + 1
@@ -364,7 +364,7 @@ module M = struct
     else
       ( if rem < 0 (* end of input *)
         then err_unexpected_end_of_input d
-        else refill (c_bytes n k) d )
+        else refill (c_bytes n k) d (* allocation *) )
 
   let checksum d =
     let k d =
@@ -443,7 +443,7 @@ module M = struct
          ; Window.add d.w byte
          ; d.o_pos <- d.o_pos + 1
          ; k d )
-    else ( d.k <- c_put_byte byte k
+    else ( d.k <- c_put_byte byte k (* allocation *)
          ; Flush )
 
   let slow_inflate lit dist jump d =
@@ -457,7 +457,7 @@ module M = struct
         if value < 256
         then
           let k d =
-            d.s <- Inflate { lit; dist; jump= Length } ;
+            d.s <- Inflate { lit; dist; jump= Length } ; (* allocation *)
             K in
           c_put_byte value k d
         else if value == 256
@@ -465,7 +465,7 @@ module M = struct
                then ( d.s <- Checkseum ; checksum d )
                else ( d.s <- Header ; K ) )
         else ( d.l <- value - 257
-             ; d.s <- Inflate { lit; dist; jump= Extra_length }
+             ; d.s <- Inflate { lit; dist; jump= Extra_length } (* allocation *)
              ; K ) in
       c_peek_bits lit.Lookup.l k d
     | Extra_length ->
@@ -475,7 +475,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.l <- base_length.(d.l) + 3 + extra ;
-        d.s <- Inflate { lit; dist; jump= Distance } ;
+        d.s <- Inflate { lit; dist; jump= Distance } ; (* allocation *)
         K in
       c_peek_bits len k d
     | Distance ->
@@ -484,7 +484,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- value ;
-        d.s <- Inflate { lit; dist; jump= Extra_distance } ;
+        d.s <- Inflate { lit; dist; jump= Extra_distance } ; (* allocation *)
         K in
       c_peek_bits dist.Lookup.l k d
     | Extra_distance ->
@@ -494,7 +494,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- base_dist.(d.d) + 1 + extra ;
-        d.s <- Inflate { lit; dist; jump= Write } ;
+        d.s <- Inflate { lit; dist; jump= Write } ; (* allocation *)
         K in
       c_peek_bits len k d
     | Write ->
@@ -508,10 +508,10 @@ module M = struct
       else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
       d.o_pos <- d.o_pos + len ;
       if d.l - len == 0
-      then ( d.s <- Inflate { lit; dist; jump= Length }
+      then ( d.s <- Inflate { lit; dist; jump= Length } (* allocation *)
            ; K )
       else ( d.l <- d.l - len
-           ; d.s <- Inflate { lit; dist; jump= Write }
+           ; d.s <- Inflate { lit; dist; jump= Write } (* allocation *)
            ; Flush )
 
   exception End
@@ -600,7 +600,7 @@ module M = struct
       d.bits <- !bits ;
       d.i_pos <- !i_pos ;
       d.o_pos <- !o_pos ;
-      d.k <- slow_inflate lit dist !jump ;
+      d.k <- slow_inflate lit dist !jump ; (* allocation *)
       d.s <- Slow ;
 
       if i_rem d > 0 then Flush else Await
@@ -618,7 +618,7 @@ module M = struct
 
   let fixed d =
     let lit, dist = fixed_lit, fixed_dist in
-    d.s <- Inflate { lit; dist; jump= Length };
+    d.s <- Inflate { lit; dist; jump= Length }; (* allocation *)
     inflate lit dist Length d
 
   let make_table t hlit hdist d =
@@ -628,7 +628,7 @@ module M = struct
     let lit = Lookup.make t_lit l_lit in
     let dist = Lookup.make t_dist l_dist in
 
-    d.s <- Inflate { lit; dist; jump= Length };
+    d.s <- Inflate { lit; dist; jump= Length }; (* allocation *)
     inflate lit dist Length d
 
   let inflate_table d =
@@ -729,7 +729,7 @@ module M = struct
   let decode_k d = match d.s with
     | Header ->
       let l_header d =
-        assert (d.bits >= 3) ;
+        assert (d.bits >= 3) ; (* allocation *)
         let last = d.hold land 1 == 1 in
         let k = match (d.hold land 0x6) lsr 1 with
           | 0 -> flat_header
@@ -753,14 +753,12 @@ module M = struct
     | Checkseum -> checksum d
     | End_of_inflate -> d.k d
 
-  let decode d =
-    let rec go () = match decode_k d with
-      | Await -> `Await
-      | Flush -> `Flush
-      | End -> `End
-      | Malformed err -> `Malformed err
-      | K -> go () in
-    go ()
+  let rec decode d = match decode_k d with
+    | Await -> `Await
+    | Flush -> `Flush
+    | End -> `End
+    | Malformed err -> `Malformed err
+    | K -> decode d
 
   let dst_rem d = bigstring_length d.o - d.o_pos
   let flush d = d.o_pos <- 0
