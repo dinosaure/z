@@ -89,7 +89,7 @@ module Window = struct
 
   let max = 1 lsl 15
   let mask = (1 lsl 15) - 1
-  let ( = ) (a : int) b = a = b
+  let ( = ) (a : int) b = a == b
 
   let make () =
     { raw= Bigarray.Array1.create Bigarray.char Bigarray.c_layout max
@@ -264,7 +264,7 @@ module M = struct
   let src d s j l =
     if (j < 0 || l < 0 || j + l > bigstring_length s)
     then invalid_bounds j l ;
-    if (l = 0) then eoi d
+    if (l == 0) then eoi d
     else
       ( d.i <- s
       ; d.i_pos <- j
@@ -721,7 +721,6 @@ module M = struct
       d.s <- Table { hlit; hdist; hclen; } ;
       d.hold <- d.hold lsr 14 ;
       d.bits <- d.bits - 14 ;
-      assert (d.bits < 64 - (hclen * 3)) ; (* XXX(dinosaure): TODO! *)
       c_peek_bits (hclen * 3) table d in
     c_peek_bits 14 l_header d
 
