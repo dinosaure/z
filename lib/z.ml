@@ -74,6 +74,7 @@ module Lookup = struct
 
   let get t i =
     let v = t.t.(i) in v lsr 15, v land mask
+  [@@inline]
 
   let pp ppf t =
     Fmt.pf ppf "{ @[<hov>t = @[<hov>%a@];@ m = %x;@ l = %d;@] }"
