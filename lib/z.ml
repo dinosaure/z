@@ -4,9 +4,8 @@ let bigstring_empty = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0
 let bigstring_length x = Bigarray.Array1.dim x [@@inline]
 let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout l
 
-let unsafe_get_uint8 buf off = Char.code (Bigarray.Array1.get buf off)
-
-let unsafe_set_uint8 buf off v = Bigarray.Array1.set buf off (Char.unsafe_chr v)
+external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
+external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
 
 let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
 
