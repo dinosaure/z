@@ -1,6 +1,12 @@
-let unsafe_get_uint8 buf off = Char.code (Bytes.get buf off)
+type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 
-let unsafe_set_uint8 buf off v = Bytes.set buf off (Char.unsafe_chr v)
+let bigstring_empty = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0
+let bigstring_length x = Bigarray.Array1.dim x [@@inline]
+let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout l
+
+let unsafe_get_uint8 buf off = Char.code (Bigarray.Array1.get buf off)
+
+let unsafe_set_uint8 buf off v = Bigarray.Array1.set buf off (Char.unsafe_chr v)
 
 let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
 
@@ -77,7 +83,7 @@ end
 
 module Window = struct
   type t =
-    { raw : Bytes.t
+    { raw : bigstring
     ; mutable w : int
     ; mutable c : Optint.t }
 
@@ -86,15 +92,18 @@ module Window = struct
   let ( = ) (a : int) b = a = b
 
   let make () =
-    { raw= Bytes.create max
+    { raw= Bigarray.Array1.create Bigarray.char Bigarray.c_layout max
     ; w= 0
     ; c= Checkseum.Adler32.default }
+
+  let from raw =
+    { raw; w= 0; c= Checkseum.Adler32.default }
 
   let mask v = v land mask
   [@@inline]
 
   let update w =
-    let c = Checkseum.Adler32.unsafe_digest_bytes w.raw 0 max w.c in
+    let c = Checkseum.Adler32.unsafe_digest_bigstring w.raw 0 max w.c in
     w.c <- c
 
   let add t v =
@@ -116,7 +125,7 @@ module Window = struct
   let tail w =
     let msk = mask w.w in
     if msk > 0
-    then ( let c = Checkseum.Adler32.unsafe_digest_bytes w.raw 0 msk w.c in
+    then ( let c = Checkseum.Adler32.unsafe_digest_bigstring w.raw 0 msk w.c in
            w.c <- c )
 
   let checksum w = w.c
@@ -181,13 +190,13 @@ module M = struct
 
   type decoder =
     { src : src
-    ; mutable i : Bytes.t
+    ; mutable i : bigstring
     ; mutable i_pos : int
     ; mutable i_len : int
     ; mutable hold : int
     ; mutable bits : int
     ; mutable last : bool
-    ; o : Bytes.t
+    ; o : bigstring
     ; mutable o_pos : int
     ; mutable l : int (* literal / length *)
     ; mutable d : int (* distance *)
@@ -223,7 +232,7 @@ module M = struct
   let malformedf fmt = Fmt.kstrf (fun s -> Malformed s) fmt
 
   let eoi d =
-    d.i <- Bytes.empty ;
+    d.i <- bigstring_empty ;
     d.i_pos <- 0 ;
     d.i_len <- min_int
 
@@ -253,7 +262,7 @@ module M = struct
   [@@inline]
 
   let src d s j l =
-    if (j < 0 || l < 0 || j + l > Bytes.length s)
+    if (j < 0 || l < 0 || j + l > bigstring_length s)
     then invalid_bounds j l ;
     if (l = 0) then eoi d
     else
@@ -264,9 +273,7 @@ module M = struct
   let refill k d = match d.src with
     | `String _ ->
       eoi d ; k d
-    | `Channel ic ->
-      let l = input ic d.i 0 (Bytes.length d.i) in
-      src d d.i 0 l ; k d
+    | `Channel _ -> assert false
     | `Manual ->
       d.k <- k ; Await
 
@@ -381,7 +388,7 @@ module M = struct
     c_bytes required k d
 
   let flat d =
-    let len = min (min (i_rem d) d.l) (Bytes.length d.o - d.o_pos) in
+    let len = min (min (i_rem d) d.l) (bigstring_length d.o - d.o_pos) in
     Window.blit d.w d.i d.i_pos d.o d.o_pos len ;
     d.o_pos <- d.o_pos + len ;
     d.i_pos <- d.i_pos + len ;
@@ -391,7 +398,7 @@ module M = struct
     then ( if d.last
            then ( d.s <- Checkseum ; checksum d )
            else ( d.s <- Header ; K ) )
-    else match i_rem d, Bytes.length d.o - d.o_pos with
+    else match i_rem d, bigstring_length d.o - d.o_pos with
       | 0, _ -> Await
       | _, 0 -> Flush
       | _, _ -> assert false
@@ -429,7 +436,7 @@ module M = struct
      ; 768; 1024; 1536; 2048; 3072; 4096; 6144; 8192; 12288; 16384; 24576 |]
 
   let rec c_put_byte byte k d =
-    if d.o_pos < Bytes.length d.o
+    if d.o_pos < bigstring_length d.o
     then ( unsafe_set_uint8 d.o d.o_pos byte
          ; Window.add d.w byte
          ; d.o_pos <- d.o_pos + 1
@@ -489,7 +496,7 @@ module M = struct
         K in
       c_peek_bits len k d
     | Write ->
-      let len = min d.l (Bytes.length d.o - d.o_pos) in
+      let len = min d.l (bigstring_length d.o - d.o_pos) in
       let off = Window.mask (d.w.Window.w - d.d) in
       let pre = Window.max - off in
       let rst = len - pre in
@@ -515,7 +522,7 @@ module M = struct
     let o_pos = ref d.o_pos in
 
     try while d.i_len - !i_pos + 1 > 1
-          && !o_pos < Bytes.length d.o
+          && !o_pos < bigstring_length d.o
       do match !jump with
         | Length ->
           if !bits < lit.Lookup.l
@@ -575,7 +582,7 @@ module M = struct
           d.d <- base_dist.(d.d) + 1 + extra ;
           jump := Write
         | Write ->
-          let len = min d.l (Bytes.length d.o - !o_pos) in
+          let len = min d.l (bigstring_length d.o - !o_pos) in
           let off = Window.mask (d.w.Window.w - d.d) in
           let pre = Window.max - off in
           let rst = len - pre in
@@ -754,14 +761,13 @@ module M = struct
       | K -> go () in
     go ()
 
-  let dst_rem d = Bytes.length d.o - d.o_pos
+  let dst_rem d = bigstring_length d.o - d.o_pos
   let flush d = d.o_pos <- 0
 
-  let decoder src o =
+  let decoder src o w =
     let i, i_pos, i_len = match src with
-      | `Manual -> Bytes.empty, 1, 0
-      | `Channel _ -> Bytes.create io_buffer_size, 1, 0
-      | `String s -> Bytes.unsafe_of_string s, 0, String.length s - 1 in
+      | `Manual -> bigstring_empty, 1, 0
+      | `Channel _ | `String _ -> assert false in
     { src
     ; i
     ; i_pos
@@ -773,7 +779,7 @@ module M = struct
     ; last= false
     ; l= 0
     ; d= 0
-    ; w= Window.make ()
+    ; w= Window.from w
     ; s= Header
     ; k= decode_k }
 end
