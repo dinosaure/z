@@ -1,17 +1,19 @@
-let zlib_header = Bytes.create 2
+let zlib_header = Z.bigstring_create 2
+
+let w = Z.bigstring_create Z.Window.max
+let o = Z.bigstring_create Z.io_buffer_size
+let i = Z.bigstring_create Z.io_buffer_size
 
 let run _ =
-  let[@warning "-8"] 2 = input stdin zlib_header 0 2 in
-  let o = Bytes.create 0x800 in
-  let decoder = Z.M.decoder `Manual o in
-  let raw = Bytes.create 0x800 in
+  let[@warning "-8"] 2 = Bs.bigstring_input Unix.stdin zlib_header 0 2 in
+  let decoder = Z.M.decoder `Manual o w in
   let rec go () = match Z.M.decode decoder with
     | `Await ->
-      let len = input stdin raw 0 (Bytes.length raw) in
-      Z.M.src decoder raw 0 len ; go ()
+      let len = Bs.bigstring_input Unix.stdin i 0 Z.io_buffer_size in
+      Z.M.src decoder i 0 len ; go ()
     | `Flush ->
-      let len = 0x800 - Z.M.dst_rem decoder in
-      output stdout o 0 len ; Z.M.flush decoder ; go ()
+      let len = Z.io_buffer_size - Z.M.dst_rem decoder in
+      Bs.bigstring_output Unix.stdout o 0 len ; Z.M.flush decoder ; go ()
     | `Malformed err ->
       Fmt.epr "%s.\n%!" err ; `Error err
     | `End -> `Ok () in

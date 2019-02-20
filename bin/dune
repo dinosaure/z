@@ -1,3 +1,10 @@
+(library
+ (name bs)
+ (modules bs)
+ (c_names bs)
+ (libraries unix z))
+
 (executable
  (name pipe)
- (libraries checkseum.c z cmdliner))
+ (modules pipe)
+ (libraries checkseum.c z bs cmdliner))
