@@ -18,12 +18,14 @@ let blit2 src src_off dst0 dst0_off dst1 dst1_off len =
 let io_buffer_size = 65536
 
 external ( < ) : 'a -> 'a -> bool = "%lessthan"
+external ( <= ) : 'a -> 'a -> bool = "%lessequal"
 external ( > ) : 'a -> 'a -> bool = "%greaterthan"
 
 let ( > ) (x : int) y = x > y [@@inline]
 let ( < ) (x : int) y = x < y [@@inline]
+let ( <= ) (x : int) y = x <= y [@@inline]
 
-let min (a : int) b = min a b [@@inline]
+let min (a : int) b = if a <= b then a else b [@@inline]
 
 type optint = Optint.t
 
