@@ -75,7 +75,7 @@ module Lookup = struct
   let make t m = { t; m= (1 lsl m) - 1; l= m }
 
   let get t i =
-    let v = Array.unsafe_get t.t i in v lsr 15, v land mask (* allocation *)
+    let v = t.t.(i) in v lsr 15, v land mask (* allocation *)
   [@@inline]
 
   let pp ppf t =
@@ -451,7 +451,8 @@ module M = struct
     match jump with
     | Length ->
       let k d =
-        let len, value = Lookup.get lit (d.hold land lit.Lookup.m) in
+        let value = lit.Lookup.t.(d.hold land lit.Lookup.m) land Lookup.mask in
+        let len = lit.Lookup.t.(d.hold land lit.Lookup.m) lsr 15 in
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
 
@@ -481,7 +482,8 @@ module M = struct
       c_peek_bits len k d
     | Distance ->
       let k d =
-        let len, value = Lookup.get dist (d.hold land dist.Lookup.m) in
+        let value = dist.Lookup.t.(d.hold land dist.Lookup.m) land Lookup.mask in
+        let len = dist.Lookup.t.(d.hold land dist.Lookup.m) lsr 15 in
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- value ;
@@ -535,7 +537,8 @@ module M = struct
                ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
                ; bits := !bits + 8
                ; incr i_pos ) ;
-          let len, value = Lookup.get lit (!hold land lit.Lookup.m) in
+          let value = lit.Lookup.t.(!hold land lit.Lookup.m) land Lookup.mask in
+          let len = lit.Lookup.t.(!hold land lit.Lookup.m) lsr 15 in
           hold := !hold lsr len ;
           bits := !bits - len ;
           if value < 256
@@ -565,7 +568,8 @@ module M = struct
               ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
               ; bits := !bits + 8
               ; incr i_pos ) ;
-          let len, value = Lookup.get dist (!hold land dist.Lookup.m) in
+          let value = dist.Lookup.t.(!hold land dist.Lookup.m) land Lookup.mask in
+          let len = dist.Lookup.t.(!hold land dist.Lookup.m) lsr 15 in
           hold := !hold lsr len ;
           bits := !bits - len ;
           d.d <- value ;
