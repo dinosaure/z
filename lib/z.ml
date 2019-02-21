@@ -75,7 +75,7 @@ module Lookup = struct
   let make t m = { t; m= (1 lsl m) - 1; l= m }
 
   let get t i =
-    let v = t.t.(i) in v lsr 15, v land mask (* allocation *)
+    let v = Array.unsafe_get t.t i in v lsr 15, v land mask (* allocation *)
   [@@inline]
 
   let pp ppf t =
