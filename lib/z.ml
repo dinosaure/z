@@ -467,6 +467,7 @@ module M = struct
                then ( d.s <- Checkseum ; checksum d )
                else ( d.s <- Header ; K ) )
         else ( d.l <- value - 257
+             ; d.jump <- Extra_length
              ; d.s <- Inflate (* allocation *)
              ; K ) in
       c_peek_bits lit.Lookup.l k d
@@ -477,6 +478,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.l <- base_length.(d.l) + 3 + extra ;
+        d.jump <- Distance ;
         d.s <- Inflate ; (* allocation *)
         K in
       c_peek_bits len k d
@@ -487,6 +489,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- value ;
+        d.jump <- Extra_distance ;
         d.s <- Inflate ; (* allocation *)
         K in
       c_peek_bits dist.Lookup.l k d
@@ -497,6 +500,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- base_dist.(d.d) + 1 + extra ;
+        d.jump <- Write ;
         d.s <- Inflate ; (* allocation *)
         K in
       c_peek_bits len k d
@@ -511,7 +515,8 @@ module M = struct
       else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
       d.o_pos <- d.o_pos + len ;
       if d.l - len == 0
-      then ( d.s <- Inflate (* allocation *)
+      then ( d.jump <- Length
+           ; d.s <- Inflate (* allocation *)
            ; K )
       else ( d.l <- d.l - len
            ; d.s <- Inflate (* allocation *)
@@ -541,6 +546,7 @@ module M = struct
           let len = lit.Lookup.t.(!hold land lit.Lookup.m) lsr 15 in
           hold := !hold lsr len ;
           bits := !bits - len ;
+
           if value < 256
           then ( unsafe_set_uint8 d.o !o_pos value
                ; Window.add d.w value
