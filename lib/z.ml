@@ -488,9 +488,13 @@ module M = struct
     [| 0; 0; 0; 0; 0; 0; 0; 0; 1; 1; 1; 1; 2; 2; 2; 2; 3; 3; 3; 3; 4; 4; 4; 4; 5
      ; 5; 5; 5; 0 |]
 
+  let n_extra_lbits = Array.map Nativeint.of_int extra_lbits
+
   let extra_dbits =
     [| 0; 0; 0; 0; 1; 1; 2; 2; 3; 3; 4; 4; 5; 5; 6; 6; 7; 7; 8; 8; 9; 9; 10; 10
      ; 11; 11; 12; 12; 13; 13 |]
+
+  let n_extra_dbits = Array.map Nativeint.of_int extra_dbits
 
   let base_length =
     [| 0; 1; 2; 3; 4; 5; 6; 7; 8; 10; 12; 14; 16; 20; 24; 28; 32; 40; 48; 56; 64
@@ -626,7 +630,7 @@ module M = struct
           then ( hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
                ; bits := !bits + 8
                ; incr i_pos ) ;
-          let extra = (Nativeint.to_int !hold) land ((1 lsl len) - 1) in
+          let extra = Nativeint.(to_int (logand !hold (sub (shift_left 1n len) 1n))) in
           hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.l <- base_length.(d.l) + 3 + extra ;
@@ -654,7 +658,7 @@ module M = struct
                ; hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
                ; bits := !bits + 8
                ; incr i_pos ) ;
-          let extra = (Nativeint.to_int !hold) land ((1 lsl len) - 1) in
+          let extra = Nativeint.(to_int (logand !hold (sub (shift_left 1n len) 1n))) in
           hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.d <- base_dist.(d.d) + 1 + extra ;
