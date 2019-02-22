@@ -6,14 +6,41 @@ let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
+external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
+external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
 
 let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
 
-let blit2 src src_off dst0 dst0_off dst1 dst1_off len =
-  for i = 0 to len - 1 do
-    unsafe_set_uint8 dst0 (dst0_off + i) (unsafe_get_uint8 src (src_off + i)) ;
-    unsafe_set_uint8 dst1 (dst1_off + i) (unsafe_get_uint8 src (src_off + i))
+let slow_blit2 src src_off dst0 dst0_off dst1 dst1_off len =
+  for i = 0 to len - 1
+  do
+    let v = unsafe_get_uint8 src (src_off + i) in
+    unsafe_set_uint8 dst0 (dst0_off + i) v ;
+    unsafe_set_uint8 dst1 (dst1_off + i) v ;
   done
+
+let blit2 src src_off dst0 dst0_off dst1 dst1_off len =
+  if dst0_off - src_off < 4
+  then slow_blit2 src src_off dst0 dst0_off dst1 dst1_off len
+  else
+    let len0 = len land 3 in
+    let len1 = len asr 2 in
+
+    for i = 0 to len1 - 1
+    do
+      let i = i * 4 in
+      let v = unsafe_get_uint32 src (src_off + i) in
+      unsafe_set_uint32 dst0 (dst0_off + i) v ;
+      unsafe_set_uint32 dst1 (dst1_off + i) v ;
+    done ;
+
+    for i = 0 to len0 - 1
+    do
+      let i = len1 * 4 + i in
+      let v = unsafe_get_uint8 src (src_off + i) in
+      unsafe_set_uint8 dst0 (dst0_off + i) v ;
+      unsafe_set_uint8 dst1 (dst1_off + i) v ;
+    done
 
 let io_buffer_size = 65536
 
