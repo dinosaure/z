@@ -587,26 +587,29 @@ module M = struct
   exception End
 
   let inflate lit dist jump d =
-    let hold = ref d.hold in
+    let hold = ref (Nativeint.of_int d.hold) in
     let bits = ref d.bits in
     let jump = ref jump in
     let i_pos = ref d.i_pos in
     let o_pos = ref d.o_pos in
+
+    let lit_mask = Nativeint.of_int lit.Lookup.m in
+    let dist_mask = Nativeint.of_int dist.Lookup.m in
 
     try while d.i_len - !i_pos + 1 > 1
           && !o_pos < bigstring_length d.o
       do match !jump with
         | Length ->
           if !bits < lit.Lookup.l
-          then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+          then ( hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
                ; bits := !bits + 8
                ; incr i_pos
-               ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+               ; hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
                ; bits := !bits + 8
                ; incr i_pos ) ;
-          let value = lit.Lookup.t.(!hold land lit.Lookup.m) land Lookup.mask in
-          let len = lit.Lookup.t.(!hold land lit.Lookup.m) lsr 15 in
-          hold := !hold lsr len ;
+          let value = lit.Lookup.t.(Nativeint.(to_int (logand !hold lit_mask))) land Lookup.mask in
+          let len = lit.Lookup.t.(Nativeint.(to_int (logand !hold lit_mask))) lsr 15 in
+          hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
 
           if value < 256
@@ -620,39 +623,39 @@ module M = struct
         | Extra_length ->
           let len = extra_lbits.(d.l) in
           if !bits < len
-          then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+          then ( hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
                ; bits := !bits + 8
                ; incr i_pos ) ;
-          let extra = !hold land ((1 lsl len) - 1) in
-          hold := !hold lsr len ;
+          let extra = (Nativeint.to_int !hold) land ((1 lsl len) - 1) in
+          hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.l <- base_length.(d.l) + 3 + extra ;
           jump := Distance
         | Distance ->
           if !bits < dist.Lookup.l
-          then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
-              ; bits := !bits + 8
-              ; incr i_pos
-              ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
-              ; bits := !bits + 8
+          then ( hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
+               ; bits := !bits + 8
+               ; incr i_pos
+               ; hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
+               ; bits := !bits + 8
               ; incr i_pos ) ;
-          let value = dist.Lookup.t.(!hold land dist.Lookup.m) land Lookup.mask in
-          let len = dist.Lookup.t.(!hold land dist.Lookup.m) lsr 15 in
-          hold := !hold lsr len ;
+          let value = dist.Lookup.t.(Nativeint.(to_int (logand !hold dist_mask))) land Lookup.mask in
+          let len = dist.Lookup.t.(Nativeint.(to_int (logand !hold dist_mask))) lsr 15 in
+          hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.d <- value ;
           jump := Extra_distance
         | Extra_distance ->
           let len = extra_dbits.(d.d) in
           if !bits < len
-          then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+          then ( hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
                ; bits := !bits + 8
                ; incr i_pos
-               ; hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+               ; hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.i !i_pos)) !bits)
                ; bits := !bits + 8
                ; incr i_pos ) ;
-          let extra = !hold land ((1 lsl len) - 1) in
-          hold := !hold lsr len ;
+          let extra = (Nativeint.to_int !hold) land ((1 lsl len) - 1) in
+          hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.d <- base_dist.(d.d) + 1 + extra ;
           jump := Write
@@ -676,7 +679,7 @@ module M = struct
           if d.l - len == 0 then jump := Length else d.l <- d.l - len
       done ;
 
-      d.hold <- !hold ;
+      d.hold <- Nativeint.to_int !hold ;
       d.bits <- !bits ;
       d.i_pos <- !i_pos ;
       d.o_pos <- !o_pos ;
@@ -686,7 +689,7 @@ module M = struct
 
       if i_rem d > 0 then Flush else Await
     with End ->
-      d.hold <- !hold ;
+      d.hold <- Nativeint.to_int !hold ;
       d.bits <- !bits ;
       d.i_pos <- !i_pos ;
       d.o_pos <- !o_pos ;
