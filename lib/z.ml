@@ -6,6 +6,7 @@ let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
+
 external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
 external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
 
@@ -41,6 +42,29 @@ let blit2 src src_off dst0 dst0_off dst1 dst1_off len =
       unsafe_set_uint8 dst0 (dst0_off + i) v ;
       unsafe_set_uint8 dst1 (dst1_off + i) v ;
     done
+
+let fill2 v dst0 dst0_off dst1 dst1_off len =
+  let len0 = len land 3 in
+  let len1 = len asr 2 in
+
+  let nv = Nativeint.of_int v in
+  let vv = Nativeint.(logor (shift_left nv 8) nv) in
+  let vvvv = Nativeint.(logor (shift_left vv 16) vv) in
+  let vvvv = Nativeint.to_int32 vvvv in
+
+  for i = 0 to len1 - 1
+  do
+    let i = i * 4 in
+    unsafe_set_uint32 dst0 (dst0_off + i) vvvv ;
+    unsafe_set_uint32 dst1 (dst1_off + i) vvvv
+  done ;
+
+  for i = 0 to len0 - 1
+  do
+    let i = len1 * 4 + i in
+    unsafe_set_uint8 dst0 (dst0_off + i) v ;
+    unsafe_set_uint8 dst1 (dst1_off + i) v
+  done
 
 let io_buffer_size = 65536
 
@@ -149,6 +173,17 @@ module Window = struct
          ; update t
          ; blit2 w (w_off + pre) t.raw 0 o (o_off + pre) rst )
     else blit2 w w_off t.raw msk o o_off len ;
+    t.w <- t.w + len
+
+  let fill t v o o_off len =
+    let msk = mask t.w in
+    let pre = max - msk in
+    let rst = len - pre in
+    if rst >= 0
+    then ( fill2 v t.raw msk o o_off pre
+         ; update t
+         ; fill2 v t.raw 0 o (o_off + pre) rst )
+    else fill2 v t.raw msk o o_off len ;
     t.w <- t.w + len
 
   let tail w =
@@ -538,7 +573,7 @@ module M = struct
       let rst = len - pre in
       if rst > 0
       then ( Window.blit d.w d.w.Window.raw off d.o d.o_pos pre
-           ; Window.blit d.w d.w.Window.raw 0 d.o (d.o_pos + pre) rst )
+               ; Window.blit d.w d.w.Window.raw 0 d.o (d.o_pos + pre) rst )
       else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
       d.o_pos <- d.o_pos + len ;
       if d.l - len == 0
@@ -624,12 +659,19 @@ module M = struct
         | Write ->
           let len = min d.l (bigstring_length d.o - !o_pos) in
           let off = Window.mask (d.w.Window.w - d.d) in
-          let pre = Window.max - off in
-          let rst = len - pre in
-          if rst > 0
-          then ( Window.blit d.w d.w.Window.raw off d.o !o_pos pre
-               ; Window.blit d.w d.w.Window.raw 0 d.o (!o_pos + pre) rst )
-          else Window.blit d.w d.w.Window.raw off d.o !o_pos len ;
+
+          if d.d == 1
+          then
+            ( let v = unsafe_get_uint8 d.w.Window.raw off in
+              Window.fill d.w v d.o !o_pos len )
+          else
+            ( let off = Window.mask (d.w.Window.w - d.d) in
+              let pre = Window.max - off in
+              let rst = len - pre in
+              if rst > 0
+              then ( Window.blit d.w d.w.Window.raw off d.o !o_pos pre
+                   ; Window.blit d.w d.w.Window.raw 0 d.o (!o_pos + pre) rst )
+              else Window.blit d.w d.w.Window.raw off d.o !o_pos len ) ;
           o_pos := !o_pos + len ;
           if d.l - len == 0 then jump := Length else d.l <- d.l - len
       done ;
