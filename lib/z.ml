@@ -1,14 +1,21 @@
+[@@@warning "-32-34-37"]
+
 type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 
 let bigstring_empty = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0
-let bigstring_length x = Bigarray.Array1.dim x [@@inline]
 let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout l
+let bigstring_length x = Bigarray.Array1.dim x [@@inline]
+let bigstring_sub x off len = Bigarray.Array1.sub x off len [@@inline]
+let bigstring_blit a b = Bigarray.Array1.blit a b [@@inline]
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
+external unsafe_get_uint26 : bigstring -> int -> int = "%caml_ba_ref_1" (* TODO *)
 
 external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
 external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
+
+let output_bigstring _ _ _ _ = ()
 
 let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
 
@@ -70,11 +77,13 @@ let io_buffer_size = 65536
 
 external ( < ) : 'a -> 'a -> bool = "%lessthan"
 external ( <= ) : 'a -> 'a -> bool = "%lessequal"
+external ( >= ) : 'a -> 'a -> bool = "%greaterequal"
 external ( > ) : 'a -> 'a -> bool = "%greaterthan"
 
 let ( > ) (x : int) y = x > y [@@inline]
 let ( < ) (x : int) y = x < y [@@inline]
 let ( <= ) (x : int) y = x <= y [@@inline]
+let ( >= ) (x : int) y = x >= y [@@inline]
 
 let min (a : int) b = if a <= b then a else b [@@inline]
 
@@ -296,6 +305,9 @@ module M = struct
 
   let malformedf fmt = Fmt.kstrf (fun s -> Malformed s) fmt
 
+  (* End of input [eoi] is signalled by [d.i_pos = 0] and [d.i_len = min_int]
+     which implies [i_rem d < 0] is [true]. *)
+
   let eoi d =
     d.i <- bigstring_empty ;
     d.i_pos <- 0 ;
@@ -323,9 +335,11 @@ module M = struct
     eoi d ; d.k <- final ;
     malformedf "Invalid complement of length"
 
+  (* remaining bytes to read [d.i]. *)
   let i_rem d = d.i_len - d.i_pos + 1
   [@@inline]
 
+  (* set [d.i] with [s]. *)
   let src d s j l =
     if (j < 0 || l < 0 || j + l > bigstring_length s)
     then invalid_bounds j l ;
@@ -335,13 +349,15 @@ module M = struct
       ; d.i_pos <- j
       ; d.i_len <- j + l - 1 )
 
+  (* get new input in [d.i] and [k]ontinue. *)
   let refill k d = match d.src with
     | `String _ ->
       eoi d ; k d
-    | `Channel _ -> assert false
+    | `Channel _ -> assert false (* TODO *)
     | `Manual ->
       d.k <- k ; Await
 
+  (* ensure to call [k] with, at least, [n] bits available. *)
   let rec c_peek_bits n k d =
     if d.bits >= n then k d
     else
@@ -409,6 +425,9 @@ module M = struct
     let tbl_lit, max_lit = huffman tbl_lit 0 288 in
     Lookup.make tbl_lit max_lit, Lookup.make tbl_dist 5
 
+  (* XXX(dinosaure): [d.hold] can stores a byte from input. In this case, if we
+     want a byte, we give [d.hold & 0xff]. Otherwise, we directly give byte from
+     [d.i]. *)
   let hold_or_input d =
     if d.bits >= 8
     then ( d.hold <- d.hold lsr (d.bits mod 8)
@@ -599,6 +618,10 @@ module M = struct
 
     let lit_mask = Nativeint.of_int lit.Lookup.m in
     let dist_mask = Nativeint.of_int dist.Lookup.m in
+
+    (* XXX(dinosaure): 2 jumps were done in this hot-loop (1- [while], 2- [match .. with]). a [let rec length =
+       .. and extra_length = ..] can be optimized by [flambda]. We should
+       replace [match .. with] by this design. TODO. *)
 
     try while d.i_len - !i_pos + 1 > 1
           && !o_pos < bigstring_length d.o
@@ -844,7 +867,7 @@ module M = struct
       else slow_inflate d.literal d.distance d.jump d
     | Slow -> d.k d
     | Flat -> flat d
-    | Checkseum -> checksum d
+    | Checkseum -> d.k d
     | End_of_inflate -> d.k d
 
   let rec decode d = match decode_k d with
@@ -878,4 +901,596 @@ module M = struct
     ; w= Window.from w
     ; s= Header
     ; k= decode_k }
+end
+
+module T = struct
+  module Heap = struct
+    type t = { buffer : int array
+             ; mutable length : int }
+
+    let make size = { buffer= Array.make (size * 2) 0; length= 0 }
+    let get_parent i = (i - 2) / 4 * 2
+    let get_child i = (2 * i) + 2
+
+    exception Break
+
+    let push index value ({ buffer; length; } as heap) =
+      let swap i j =
+        let t = buffer.(i) in
+        buffer.(i) <- buffer.(j) ;
+        buffer.(j) <- t
+      in
+      buffer.(length) <- value ;
+      buffer.(length + 1) <- index ;
+      let current = ref length in
+      ( try
+          while !current > 0 do
+            let parent = get_parent !current in
+            if buffer.(!current) > buffer.(parent) then (
+              swap !current parent ;
+              swap (!current + 1) (parent + 1) ;
+              current := parent )
+            else raise Break
+          done
+        with Break -> () ) ;
+      heap.length <- length + 2
+
+    let pop ({ buffer; length; } as heap) =
+      let[@inline] swap i j =
+        let t = buffer.(i) in
+        buffer.(i) <- buffer.(j) ;
+        buffer.(j) <- t
+      in
+      let value = buffer.(0) in
+      let index = buffer.(1) in
+      heap.length <- length - 2 ;
+      buffer.(0) <- buffer.(heap.length) ;
+      buffer.(1) <- buffer.(heap.length + 1) ;
+      let parent = ref 0 in
+      ( try
+          while true do
+            let current = get_child !parent in
+            if current >= heap.length then raise Break ;
+            let current =
+              if
+                current + 2 < heap.length
+                && buffer.(current + 2) > buffer.(current)
+              then current + 2
+              else current
+            in
+            if buffer.(current) > buffer.(!parent) then (
+              swap current !parent ;
+              swap (current + 1) (!parent + 1) )
+            else raise Break ;
+            parent := current
+          done
+        with Break -> () ) ;
+      (index, value)
+
+    let length {length; _} = length
+  end
+
+  let reverse_package_merge p n limit =
+    let minimum_cost = Array.make limit 0 in
+    let flag = Array.make limit 0 in
+    let code_length = Array.make n limit in
+    let current_position = Array.make limit 0 in
+    let excess = ref ((1 lsl limit) - n) in
+    let half = 1 lsl (limit - 1) in
+    minimum_cost.(limit - 1) <- n ;
+    for j = 0 to limit - 1 do
+      if !excess < half then flag.(j) <- 0
+      else (
+        flag.(j) <- 1 ;
+        excess := !excess - half ) ;
+      excess := !excess lsl 1 ;
+      if limit - 2 - j >= 0 then
+        minimum_cost.(limit - 2 - j) <- (minimum_cost.(limit - 1 - j) / 2) + n
+    done ;
+    minimum_cost.(0) <- flag.(0) ;
+    let value =
+      Array.init limit (function
+        | 0 -> Array.make minimum_cost.(0) 0
+        | j ->
+            if minimum_cost.(j) > (2 * minimum_cost.(j - 1)) + flag.(j) then
+              minimum_cost.(j) <- (2 * minimum_cost.(j - 1)) + flag.(j) ;
+            Array.make minimum_cost.(j) 0 )
+    in
+    let ty = Array.init limit (fun j -> Array.make minimum_cost.(j) 0) in
+    (* Decrease codeword lengths indicated by the first element in [ty.(j)],
+      recursively accessing other lists if that first element is a package. *)
+    let rec take_package j =
+      let x = ty.(j).(current_position.(j)) in
+      if x = n then (
+        take_package (j + 1) ;
+        take_package (j + 1) )
+      else code_length.(x) <- code_length.(x) - 1 ;
+      (* remove and discard the first elements of queues [value.(j)] and
+        [ty.(j)]. *)
+      current_position.(j) <- current_position.(j) + 1
+    in
+    for t = 0 to minimum_cost.(limit - 1) - 1 do
+      value.(limit - 1).(t) <- p.(t) ;
+      ty.(limit - 1).(t) <- t
+    done ;
+    if flag.(limit - 1) = 1 then (
+      code_length.(0) <- code_length.(0) - 1 ;
+      current_position.(limit - 1) <- current_position.(limit - 1) + 1 ) ;
+    for j = limit - 2 downto 0 do
+      let i = ref 0 in
+      let next = ref current_position.(j + 1) in
+      for t = 0 to minimum_cost.(j) - 1 do
+        let weight =
+          if !next + 1 < minimum_cost.(j + 1) then
+            value.(j + 1).(!next) + value.(j + 1).(!next + 1)
+          else p.(!i)
+        in
+        if weight > p.(!i) then (
+          value.(j).(t) <- weight ;
+          ty.(j).(t) <- n ;
+          next := !next + 2 )
+        else (
+          value.(j).(t) <- p.(!i) ;
+          ty.(j).(t) <- !i ;
+          incr i )
+      done ;
+      current_position.(j) <- 0 ;
+      if flag.(j) = 1 then take_package j
+    done ;
+    code_length
+
+  exception OK
+
+  let get_lengths freqs limit =
+    let length = Array.make (Array.length freqs) 0 in
+    ( let heap = Heap.make (2 * 286)
+    (* XXX(dinosaure): [286] is [255 + 31 (5 bits)]. We did not count [3] here!
+       From zlib point-of-view, [286] is the max of any [freqs] and
+       [get_lengths] on [distance] frequencies fits. *) in
+      let max_code = ref (-1) in
+      (* Construct the initial heap, with the least frequent element in
+         heap[SMALLEST]. The sons of heap[n] are heap[2*n] and heap[2*n+1].
+         heap[0] is not used. See implementation in Heap module. *)
+      Array.iteri
+        (fun i freq ->
+          if freq > 0 then (
+            max_code := i ;
+            Heap.push i freq heap ) )
+        freqs
+    ; try
+        (* The pkzip format requires that at least one distance code exists, and
+           that at least one bit should be sent even if there is only one possible
+           code. So to avoid special checks later on we force at least two codes
+           of non zero frequency. *)
+        while Heap.length heap / 2 < 2 do
+          Heap.push (if !max_code < 2 then !max_code + 1 else 0) 1 heap ;
+          if !max_code < 2 then incr max_code
+        done ;
+        let nodes = Array.make (Heap.length heap / 2) (0, 0) in
+        let values = Array.make (Heap.length heap / 2) 0 in
+
+        if Array.length nodes = 1
+        then ( let index, _ = Heap.pop heap in
+               length.(index) <- 1 ; raise OK ) ;
+        (* The elements heap[length / 2 + 1 .. length] are leaves of the tree,
+           establish sub-heaps of increasing lengths: *)
+        for i = 0 to (Heap.length heap / 2) - 1 do
+          nodes.(i) <- Heap.pop heap ;
+          values.(i) <- nodes.(i) |> snd
+        done ;
+        (* We can now generate the bit lengths. *)
+
+        let code_length = reverse_package_merge values (Array.length values) limit in
+        Array.iteri (fun i (j, _) -> length.(j) <- code_length.(i)) nodes
+      with OK -> () )
+    ; length
+
+  let _max_supported_huffman_codesize = 32
+
+  let get_codes_from_lengths code_size_limit lengths =
+    let count = Array.make (_max_supported_huffman_codesize + 1) 0 in
+    let start_code = Array.make (_max_supported_huffman_codesize + 1) 0 in
+    let codes = Array.make (Array.length lengths) 0 in
+    Array.iter (fun length -> count.(length) <- count.(length) + 1) lengths ;
+    let code = ref 0 in
+    for i = 1 to code_size_limit do
+      start_code.(i) <- !code ;
+      code := !code + count.(i) ;
+      code := !code lsl 1
+    done ;
+    for i = 0 to Array.length lengths - 1 do
+      code := start_code.(lengths.(i)) ;
+      start_code.(lengths.(i)) <- start_code.(lengths.(i)) + 1 ;
+      for _ = 0 to lengths.(i) - 1 do
+        codes.(i) <- (codes.(i) lsl 1) lor (!code land 1) ;
+        code := !code lsr 1
+      done
+    done ; codes
+end
+
+module B = struct
+  type cmd = int
+  type t = (cmd, Bigarray.int_elt, Bigarray.c_layout) Bigarray.Array1.t
+  (* TODO: [nativeint] to avoid tag? *)
+
+  external literal : int -> cmd = "%identity"
+
+  let copy ~off ~len : cmd =
+    assert (len >= 3 && len <= 258) ;
+    assert (off <= 32768) ;
+    (len lsl 16) lor off lor 0x2000000 [@@inline]
+  (* XXX(dinosaure): note about this representation. If we use a naive repr. like (int * int), we will have a memory problem.
+     [len] can not be upper than [255 + 3 + 31 (5 bits)] according RFC 1951.
+     [dist] can not be upper than [24576 + 1 + 8191 (13 bits)] according RFC 1951.
+
+     That means, we need at least 9 bits to store [len] and 16 bits to store [dist] -> 25 bits to store a [Copy] op-code. *)
+
+  let length x = Bigarray.Array1.dim x [@@inline]
+  external unsafe_get : t -> int -> int = "%caml_ba_ref_1"
+  external unsafe_set : t -> int -> int -> unit = "%caml_ba_set_1"
+
+  let of_list l =
+    let len = List.length l in
+    let res = Bigarray.Array1.create Bigarray.int Bigarray.c_layout len in
+    List.iteri
+      (fun i -> function
+         | `Literal code -> unsafe_set res i code
+         | `Copy (off, len) -> unsafe_set res i (copy ~off ~len lor 0x2000000))
+      l ;
+    res
+
+  let to_list t =
+    let res = ref [] in
+
+    for i = length t - 1 downto 0
+    do let cmd = unsafe_get t i in
+      if cmd land 0x2000000 != 0
+      then res := `Copy (cmd lsr 16, cmd land 0xffff) :: !res
+      else res := `Literal cmd :: !res
+    done ; !res
+end
+
+module N = struct
+  type dst = [ `Channel of out_channel | `Buffer of Buffer.t | `Manual ]
+
+  type code = int
+
+  type dynamic =
+    { ltree : Lookup.t
+    ; dtree : Lookup.t
+    ; h_lit : int
+    ; h_dst : int
+    ; h_len : int
+    ; zigzag : int array
+    ; deflated : int array * int array * int array }
+
+  let deflate_trees h_lit lit_lengths h_dst dst_lengths =
+    let len = h_lit + h_dst in
+    let src = Array.make len 0 in
+    let res = Array.make (286 + 30) 0 in
+    let freqs = Array.make 19 0 in
+
+    for i = 0 to h_lit - 1 do src.(i) <- lit_lengths.(i) done ;
+    for i = h_lit to h_lit + h_dst - 1 do src.(i) <- dst_lengths.(i - h_lit) done ;
+
+    let n = ref 0 in
+    let i = ref 0 in
+
+    while !i < len do
+      let j = ref 1 in
+
+      while !i + !j < len && src.(!i + !j) == src.(!i)
+      do incr j done ;
+
+      let run_length = ref !j in
+
+      if src.(!i) == 0 then
+        if !run_length < 3 then
+          while !run_length > 0 do
+            res.(!n) <- 0 ;
+            freqs.(0) <- freqs.(0) + 1 ;
+            incr n ;
+            decr run_length ;
+          done
+        else
+          while !run_length > 0 do
+            let rpt = ref (if !run_length < 138 then !run_length else 138) in
+            (* XXX(dinosaure): replace by [min]? *)
+
+            if !rpt > !run_length - 3 && !rpt < !run_length
+            then rpt := !run_length - 3 ;
+            if !rpt <= 10 then
+              ( res.(!n) <- 17
+              ; incr n
+              ; res.(!n) <- !rpt - 3
+              ; incr n
+              ; freqs.(17) <- freqs.(17) + 1 )
+            else
+              ( res.(!n) <- 18
+              ; incr n
+              ; res.(!n) <- (!rpt - 11)
+              ; incr n
+              ; freqs.(18) <- freqs.(18) + 1 ) ;
+            run_length := !run_length - !rpt
+          done
+      else
+        ( res.(!n) <- src.(!i)
+        ; incr n
+        ; freqs.(src.(!i)) <- freqs.(src.(!i)) + 1
+        ; decr run_length
+        ; if !run_length < 3 then
+            while !run_length > 0 do
+              res.(!n) <- src.(!i) ;
+              incr n ;
+              freqs.(src.(!i)) <- freqs.(src.(!i)) + 1 ;
+              decr run_length ;
+            done
+          else
+            while !run_length > 0 do
+              let rpt = ref (if !run_length < 6 then !run_length else 6) in
+              (* XXX(dinosaure): [min]? *)
+              if !rpt > !run_length - 3 && !rpt < !run_length
+              then rpt := !run_length - 3 ;
+
+              res.(!n) <- 16 ;
+              incr n ;
+              res.(!n) <- (!rpt - 3) ;
+              incr n ;
+              freqs.(16) <- freqs.(16) + 1 ;
+              run_length := !run_length - !rpt
+            done ) ;
+      i := !i + !j
+    done ;
+    Array.sub res 0 !n, freqs
+
+  (* XXX(dinosaure): this part needs a big check. *)
+
+  let dynamic_of_frequencies
+    : literals:int array -> distances:int array -> dynamic
+    = fun ~literals:lit_freqs ~distances:dst_freqs ->
+    let lit_lengths = T.get_lengths lit_freqs 15 in
+    let dst_lengths = T.get_lengths dst_freqs 15 in
+    let lit_codes = T.get_codes_from_lengths 15 lit_lengths in
+    let dst_codes = T.get_codes_from_lengths 15 dst_lengths in
+
+    let h_lit = ref 286 in while !h_lit >= 256 && lit_lengths.(!h_lit - 1) == 0 do decr h_lit done ;
+    let h_dst = ref 30 in while !h_dst >= 1 && dst_lengths.(!h_dst - 1) == 0 do decr h_dst done ;
+
+    let zigzag = Array.make 19 0 in
+
+    let def_symbols, freqs = deflate_trees !h_lit lit_lengths !h_dst dst_lengths in
+    let def_lengths = T.get_lengths freqs 7 in
+    let def_codes = T.get_codes_from_lengths 7 def_lengths in
+
+    for i = 0 to 18 do zigzag.(i) <- def_lengths.(M.zigzag.(i)) done ;
+    let h_len = ref 19 in while !h_len > 4 && zigzag.(!h_len - 1) = 0 do decr h_len done ;
+
+    let ltree, ltree_max =
+      let max = ref 0 in
+      let res = Array.map2 (fun code len -> if len > !max then max := len ; (len lsl 15) lor code) lit_codes lit_lengths in
+      res, !max in
+    let dtree, dtree_max =
+      let max = ref 0 in
+      let res = Array.map2 (fun code len -> if len > !max then max := len ; (len lsl 15) lor code) dst_codes dst_lengths in
+      res, !max in
+
+    { deflated= def_symbols, def_codes, def_lengths
+    ; h_lit= !h_lit
+    ; h_dst= !h_dst
+    ; h_len= !h_len
+    ; zigzag
+    ; ltree= Lookup.make ltree ltree_max
+    ; dtree= Lookup.make dtree dtree_max }
+
+  let invalid_encode () = Fmt.invalid_arg "expected `Await encode"
+
+  let unsafe_blit src src_off dst dst_off len =
+    let a = bigstring_sub src src_off len in
+    let b = bigstring_sub dst dst_off len in
+    bigstring_blit a b
+
+  type encode = [ `Literal of code | `Copy of offset * length | `Await | `End ]
+  and offset = int and length = int
+
+  type block = Flat of int | Fixed | Dynamic of dynamic
+
+  type encoder =
+    { dst : dst
+    ; blk : block
+    ; mutable hold : int
+    ; mutable bits : int
+    ; mutable o : bigstring
+    ; mutable o_pos : int
+    ; mutable o_max : int
+    ; mutable f_pos : int
+    ; t : bigstring
+    ; mutable t_pos : int
+    ; mutable t_max : int
+    ; mutable k : encoder -> encode -> [ `Ok | `Partial ] }
+
+  (* remaining bytes to write in [e.o]. *)
+  let o_rem e = e.o_max - e.o_pos + 1
+  let t_rem e = e.t_max - e.t_pos + 1 [@@inline]
+
+  (* set [e.o] with [s]. *)
+  let dst e s j l =
+    if (j < 0 || l < 0 || j + l > bigstring_length s) then invalid_bounds j l ;
+    e.o <- s ;
+    e.o_pos <- j ;
+    e.o_max <- j + l - 1
+
+  let partial k e = function
+    | `Await -> k e
+    (* if [encode] returns [`Partial], end-user must call [encode] with [`Await]. *)
+    | `Literal _ | `Copy _ | `End -> invalid_encode ()
+
+  let flush k e = match e.dst with
+    | `Manual -> e.k <- partial k ; `Partial
+    | `Channel oc ->
+      output_bigstring oc e.o 0 e.o_pos ; e.o_pos <- 0 ; k e
+    | `Buffer b ->
+      for i = 0 to e.o_pos - 1
+      do Buffer.add_char b (Char.unsafe_chr (unsafe_get_uint8 e.o i)) done ;
+      (* TODO: check why we need [unsafe_chr]. *)
+      e.o_pos <- 0 ; k e
+
+  let t_range e max = e.t_pos <- 0 ; e.t_max <- max
+
+  let rec t_flush k e =
+    let blit e l =
+      unsafe_blit e.t e.t_pos e.o e.o_pos l ;
+      e.o_pos <- e.o_pos + l ; e.t_pos <- e.t_pos + l in
+    let rem = o_rem e in
+    let len = e.t_max - e.t_pos + 1 in
+
+    if rem < len
+    then ( blit e rem ; flush (t_flush k) e )
+    else ( blit e len ; k e )
+
+  let _flush_hold_len = Sys.word_size - 1 - 20
+  let _flush_hold_dst = Sys.word_size - 1 - 28
+
+  let w_encode k e =
+    let rem = o_rem e in
+    let len = e.bits / 8 in (* to bytes *)
+    let s, j, k =
+      if rem < len then ( t_range e (len - 1) ; e.t, 0, t_flush k )
+      else let j = e.o_pos in ( e.o_pos <- e.o_pos + len ; e.o, j, k ) in
+    for i = 0 to len - 1
+    do unsafe_set_uint8 s (j + i) (e.hold land 0xff)
+     ; e.hold <- e.hold lsr 8
+    done ;
+    e.bits <- e.bits - (len * 8) ;
+    k e
+
+  let w_flat _ = assert false
+
+  let _length =
+    [| 0; 1; 2; 3; 4; 5; 6; 7; 8; 8; 9; 9; 10; 10; 11; 11; 12; 12; 12; 12; 13
+     ; 13; 13; 13; 14; 14; 14; 14; 15; 15; 15; 15; 16; 16; 16; 16; 16; 16; 16
+     ; 16; 17; 17; 17; 17; 17; 17; 17; 17; 18; 18; 18; 18; 18; 18; 18; 18; 19
+     ; 19; 19; 19; 19; 19; 19; 19; 20; 20; 20; 20; 20; 20; 20; 20; 20; 20; 20
+     ; 20; 20; 20; 20; 20; 21; 21; 21; 21; 21; 21; 21; 21; 21; 21; 21; 21; 21
+     ; 21; 21; 21; 22; 22; 22; 22; 22; 22; 22; 22; 22; 22; 22; 22; 22; 22; 22
+     ; 22; 23; 23; 23; 23; 23; 23; 23; 23; 23; 23; 23; 23; 23; 23; 23; 23; 24
+     ; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24
+     ; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 24; 25; 25; 25; 25; 25
+     ; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25
+     ; 25; 25; 25; 25; 25; 25; 25; 25; 25; 26; 26; 26; 26; 26; 26; 26; 26; 26
+     ; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26
+     ; 26; 26; 26; 26; 26; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27
+     ; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27
+     ; 28 |]
+
+  let _distance code =
+    let t =
+      [| 0; 1; 2; 3; 4; 4; 5; 5; 6; 6; 6; 6; 7; 7; 7; 7; 8; 8; 8; 8; 8; 8; 8; 8
+       ; 9; 9; 9; 9; 9; 9; 9; 9; 10; 10; 10; 10; 10; 10; 10; 10; 10; 10; 10; 10
+       ; 10; 10; 10; 10; 11; 11; 11; 11; 11; 11; 11; 11; 11; 11; 11; 11; 11; 11
+       ; 11; 11; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12
+       ; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 12; 13; 13
+       ; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13
+       ; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 13; 14; 14; 14; 14; 14; 14
+       ; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14
+       ; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14
+       ; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14; 14
+       ; 14; 14; 14; 14; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15
+       ; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15
+       ; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15
+       ; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 15; 0; 0; 16; 17
+       ; 18; 18; 19; 19; 20; 20; 20; 20; 21; 21; 21; 21; 22; 22; 22; 22; 22; 22
+       ; 22; 22; 23; 23; 23; 23; 23; 23; 23; 23; 24; 24; 24; 24; 24; 24; 24; 24
+       ; 24; 24; 24; 24; 24; 24; 24; 24; 25; 25; 25; 25; 25; 25; 25; 25; 25; 25
+       ; 25; 25; 25; 25; 25; 25; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26
+       ; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26; 26
+       ; 26; 26; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27
+       ; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 27; 28; 28
+       ; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28
+       ; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28
+       ; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28; 28
+       ; 28; 28; 28; 28; 28; 28; 28; 28; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29
+       ; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29
+       ; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29
+       ; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29; 29
+      |]
+    in
+    if code < 256 then t.(code) else t.(256 + (code lsr 7)) [@@inline]
+
+  let _base_length =
+    [| 0; 1; 2; 3; 4; 5; 6; 7; 8; 10; 12; 14; 16; 20; 24; 28; 32; 40; 48; 56; 64
+     ; 80; 96; 112; 128; 160; 192; 224; 255 |]
+
+  let _base_dist =
+    [| 0; 1; 2; 3; 4; 6; 8; 12; 16; 24; 32; 48; 64; 96; 128; 192; 256; 384; 512
+     ; 768; 1024; 1536; 2048; 3072; 4096; 6144; 8192; 12288; 16384; 24576 |]
+
+  let _extra_lbits =
+    [| 0; 0; 0; 0; 0; 0; 0; 0; 1; 1; 1; 1; 2; 2; 2; 2; 3; 3; 3; 3; 4; 4; 4; 4; 5
+     ; 5; 5; 5; 0 |]
+
+  let _extra_dbits =
+    [| 0; 0; 0; 0; 1; 1; 2; 2; 3; 3; 4; 4; 5; 5; 6; 6; 7; 7; 8; 8; 9; 9; 10; 10
+     ; 11; 11; 12; 12; 13; 13 |]
+
+  let rec encode e v =
+    let k e = e.k <- encode ; `Ok in
+    match v, e.blk with
+    | `Await, _ -> k e
+    | `End, _ -> flush k e
+    | `Literal code, Dynamic dynamic ->
+      let v, len = Lookup.get dynamic.ltree code in
+
+      let k e =
+        e.hold <- (v lsl e.bits) lor e.hold ;
+        e.bits <- e.bits + len ;
+        k e in
+
+      if e.bits > _flush_hold_len then w_encode k e else k e
+    | `Copy (off, len), Dynamic dynamic ->
+      let v0, len0 = Lookup.get dynamic.ltree (_length.(len) + 256 + 1) in
+      let v1, len1 =
+        let code = _length.(len) in
+        len - _base_length.(code), _extra_lbits.(code) in
+      let v2, len2 = Lookup.get dynamic.dtree (_distance off) in
+      let v3, len3 =
+        let code = _distance off in
+        off - _base_dist.(code), _extra_dbits.(code) in
+
+      (* XXX(dinosaure): a really slow writer.
+         [len0 + len1 + len2 + len3 <= 48] so we have 2 problems:
+         - [e.hold] is full, so we need to flush it (see [w_encode]).
+         - it's a 32-bits machine, so we can not store [length] ([v0] and [v1])
+           and [distance] ([v2] and [v3]) atomically.
+
+         So we need:
+         - to check if we have enough space to store [length] and, then, [distance] in
+           [e.hold] (see [_flush_hold_len] and [_flush_hold_len])
+         - to flush 2 times:
+          * one for [length] (max 20 bits)
+          * second for [distance] (max 28 bits)
+      *)
+
+      let k1 e =
+        e.hold <- (v3 lsl (e.bits + len2)) lor (v2 lsl e.bits) lor e.hold ;
+        e.bits <- e.bits + len2 + len3 ;
+        k e in
+
+      let k0 e =
+        e.hold <- (v1 lsl (e.bits + len0)) lor (v0 lsl e.bits) lor e.hold ;
+        e.bits <- e.bits + len0 + len1 ;
+        if e.bits > _flush_hold_dst then w_encode k1 e else k1 e in
+
+      if e.bits > _flush_hold_len then w_encode k0 e else k0 e
+    | `Literal code, Flat max ->
+      if e.f_pos == max then w_flat e
+      else
+        let rem = o_rem e in
+        if rem < 1 then flush (fun e -> encode e v) e
+        else
+          ( unsafe_set_uint8 e.o e.o_pos code
+          ; e.o_pos <- e.o_pos + 1
+          ; e.f_pos <- e.f_pos + 1
+          ; k e )
+    | `Copy _, Flat _ -> Fmt.invalid_arg "Impossible to store a copy code inner a flat block"
+    | _, _ -> assert false
 end
