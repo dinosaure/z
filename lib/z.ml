@@ -614,7 +614,6 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- base_dist.(d.d) + 1 + extra ;
-        Fmt.epr "distance: %d, have: %d.\n%!" d.d (Window.have d.w) ;
         d.jump <- Write ;
         d.s <- Inflate ; (* allocation *)
         K in
@@ -744,15 +743,6 @@ module M = struct
           if d.l - len == 0 then jump := Length else d.l <- d.l - len
       done ;
 
-      let pp_jump ppf = function
-        | Length -> Fmt.string ppf "length"
-        | Extra_length -> Fmt.string ppf "extra-length"
-        | Distance -> Fmt.string ppf "distance"
-        | Extra_distance -> Fmt.string ppf "extra-distance"
-        | Write -> Fmt.string ppf "write" in
-
-      Fmt.epr "Leave with %a.\n%!" pp_jump !jump ;
-
       d.hold <- Nativeint.to_int !hold ;
       d.bits <- !bits ;
       d.i_pos <- !i_pos ;
@@ -799,7 +789,6 @@ module M = struct
       d.s <- Inflate ; (* allocation *)
       inflate lit dist Length d
     with Invalid_huffman ->
-      Fmt.epr "Invalid dictionary.\n" ;
       err_invalid_dictionary d
 
   let inflate_table d =
@@ -886,7 +875,6 @@ module M = struct
                            ; h= (hlit, hdist, hclen) } ;
       inflate_table d
     with Invalid_huffman ->
-      Fmt.epr "Invalid inflated dictionary.\n" ;
       err_invalid_dictionary d
 
   let dynamic d =
@@ -906,7 +894,8 @@ module M = struct
       let l_header d =
         assert (d.bits >= 3) ; (* allocation *)
         let last = d.hold land 1 == 1 in
-        let k = match (d.hold land 0x6) lsr 1 with
+        let k =
+          match (d.hold land 0x6) lsr 1 with
           | 0 -> flat_header
           | 1 -> fixed
           | 2 -> dynamic
