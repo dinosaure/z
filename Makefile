@@ -2,7 +2,7 @@ BUILDDIR=_build
 VPATH=$(BUILDDIR)
 OCAMLDIR=$(shell ocamlopt -where)
 $(shell mkdir -p $(BUILDDIR) $(BUILDDIR)/lib $(BUILDDIR)/stub $(BUILDDIR)/rev $(BUILDDIR)/stub_generator $(BUILDDIR)/test $(BUILDDIR)/generated)
-PACKAGES=optint,checkseum.c,fmt,ctypes.stubs,ctypes.foreign
+PACKAGES=bigstringaf,optint,checkseum.c,fmt,ctypes.stubs,ctypes.foreign
 
 # The files used to build the stub generator.
 GENERATOR_FILES=$(BUILDDIR)/lib/z.cmx \

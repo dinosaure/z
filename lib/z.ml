@@ -1,5 +1,7 @@
 [@@@warning "-32-34-37"]
 
+let () = Printexc.record_backtrace true
+
 type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 
 let bigstring_empty = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0
@@ -7,6 +9,8 @@ let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 
 let bigstring_length x = Bigarray.Array1.dim x [@@inline]
 let bigstring_sub x off len = Bigarray.Array1.sub x off len [@@inline]
 let bigstring_blit a b = Bigarray.Array1.blit a b [@@inline]
+let bigstring_to_string = Bigstringaf.to_string
+let bigstring_of_string x = Bigstringaf.of_string ~off:0 ~len:(String.length x) x
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
@@ -173,6 +177,8 @@ module Window = struct
     if mask (t.w + 1) == 0 then update t ;
     t.w <- t.w + 1
 
+  let have t = t.w land max
+
   let blit t w w_off o o_off len =
     let msk = mask t.w in
     let pre = max - msk in
@@ -233,12 +239,26 @@ module M = struct
     in
     aux 0 heap ; tbl
 
-  let huffman table off codes =
+  type kind =
+    | CODES | LENS | DISTS
+
+  exception Break
+
+  let huffman kind table off codes =
     let bl_count = Array.make 16 0 in
+    let max = ref 15 in
+
     for sym = 0 to codes - 1 do
       let p = table.(off + sym) in
       bl_count.(p) <- bl_count.(p) + 1
     done ;
+
+    (* XXX(dinosaure): check if we have an incomplete set for [LENS] and [DIST].
+       This code is ugly, TODO! *)
+    ( try while !max >= 1 do
+          if bl_count.(!max) != 0 then raise Break
+        ; decr max done with Break -> () ) ;
+
     let code = ref 0 in
     let left = ref 1 in
     let next_code = Array.make 16 0 in
@@ -249,7 +269,7 @@ module M = struct
       code := (!code + bl_count.(i)) lsl 1 ;
       next_code.(i) <- !code
     done ;
-    if !left > 0 then raise Invalid_huffman ;
+    if !left > 0 && (kind = CODES || !max != 1) then raise Invalid_huffman ;
     let ordered = ref Heap.None in
     let max = ref 0 in
     for i = 0 to codes - 1 do
@@ -422,7 +442,7 @@ module M = struct
     let tbl_dist =
       let res = Array.make (1 lsl 5) 0 in
       Array.iteri (fun i _ -> res.(i) <- (5 lsl 15) lor reverse_bits (i lsl 3)) res ; res in
-    let tbl_lit, max_lit = huffman tbl_lit 0 288 in
+    let tbl_lit, max_lit = huffman LENS tbl_lit 0 288 in
     Lookup.make tbl_lit max_lit, Lookup.make tbl_dist 5
 
   (* XXX(dinosaure): [d.hold] can stores a byte from input. In this case, if we
@@ -480,7 +500,7 @@ module M = struct
 
     if d.l == 0
     then ( if d.last
-           then ( d.s <- Checkseum ; checksum d )
+           then ( d.s <- End_of_inflate ; End )
            else ( d.s <- Header ; K ) )
     else match i_rem d, bigstring_length d.o - d.o_pos with
       | 0, _ -> Await
@@ -511,7 +531,7 @@ module M = struct
 
   let extra_dbits =
     [| 0; 0; 0; 0; 1; 1; 2; 2; 3; 3; 4; 4; 5; 5; 6; 6; 7; 7; 8; 8; 9; 9; 10; 10
-     ; 11; 11; 12; 12; 13; 13 |]
+     ; 11; 11; 12; 12; 13; 13; 0; 0 |]
 
   let n_extra_dbits = Array.map Nativeint.of_int extra_dbits
 
@@ -521,7 +541,15 @@ module M = struct
 
   let base_dist =
     [| 0; 1; 2; 3; 4; 6; 8; 12; 16; 24; 32; 48; 64; 96; 128; 192; 256; 384; 512
-     ; 768; 1024; 1536; 2048; 3072; 4096; 6144; 8192; 12288; 16384; 24576 |]
+     ; 768; 1024; 1536; 2048; 3072; 4096; 6144; 8192; 12288; 16384; 24576; (-1); (-1) |]
+
+  (* XXX(dinosaure): [zlib] raises "Invalid distance code" where it wants to
+     access to [base_dist.(30|31)]. It uses a smart mask to catch this behavior.
+     In this code, we did not raise an error nor /compromise/ output when we
+     fall to [Match (len:?, dist:0)] (so, nothing to do).
+
+     Case can be retrieved with "\x02\x7e\xff\xff". NOTE: [miniz] has this
+     behavior. *)
 
   let rec c_put_byte byte k d =
     if d.o_pos < bigstring_length d.o
@@ -549,7 +577,7 @@ module M = struct
           c_put_byte value k d
         else if value == 256
         then ( if d.last
-               then ( d.s <- Checkseum ; checksum d )
+               then ( d.s <- End_of_inflate ; End )
                else ( d.s <- Header ; K ) )
         else ( d.l <- value - 257
              ; d.jump <- Extra_length
@@ -571,6 +599,7 @@ module M = struct
       let k d =
         let value = dist.Lookup.t.(d.hold land dist.Lookup.m) land Lookup.mask in
         let len = dist.Lookup.t.(d.hold land dist.Lookup.m) lsr 15 in
+
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- value ;
@@ -585,6 +614,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- base_dist.(d.d) + 1 + extra ;
+        Fmt.epr "distance: %d, have: %d.\n%!" d.d (Window.have d.w) ;
         d.jump <- Write ;
         d.s <- Inflate ; (* allocation *)
         K in
@@ -608,6 +638,7 @@ module M = struct
            ; Flush )
 
   exception End
+  exception Invalid_distance
 
   let inflate lit dist jump d =
     let hold = ref (Nativeint.of_int d.hold) in
@@ -624,7 +655,7 @@ module M = struct
        replace [match .. with] by this design. TODO. *)
 
     try while d.i_len - !i_pos + 1 > 1
-          && !o_pos < bigstring_length d.o
+              && !o_pos < bigstring_length d.o
       do match !jump with
         | Length ->
           if !bits < lit.Lookup.l
@@ -654,6 +685,7 @@ module M = struct
                ; bits := !bits + 8
                ; incr i_pos ) ;
           let extra = Nativeint.(to_int (logand !hold (sub (shift_left 1n len) 1n))) in
+
           hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.l <- base_length.(d.l) + 3 + extra ;
@@ -668,6 +700,7 @@ module M = struct
               ; incr i_pos ) ;
           let value = dist.Lookup.t.(Nativeint.(to_int (logand !hold dist_mask))) land Lookup.mask in
           let len = dist.Lookup.t.(Nativeint.(to_int (logand !hold dist_mask))) lsr 15 in
+
           hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.d <- value ;
@@ -685,6 +718,11 @@ module M = struct
           hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.d <- base_dist.(d.d) + 1 + extra ;
+
+          (* if d.d > Window.have d.w then raise Invalid_distance ;
+             XXX(dinosaure): [Window.have] does not tell me the truth where
+             we need a read cursor in [Window.t] for that. *)
+
           jump := Write
         | Write ->
           let len = min d.l (bigstring_length d.o - !o_pos) in
@@ -706,6 +744,15 @@ module M = struct
           if d.l - len == 0 then jump := Length else d.l <- d.l - len
       done ;
 
+      let pp_jump ppf = function
+        | Length -> Fmt.string ppf "length"
+        | Extra_length -> Fmt.string ppf "extra-length"
+        | Distance -> Fmt.string ppf "distance"
+        | Extra_distance -> Fmt.string ppf "extra-distance"
+        | Write -> Fmt.string ppf "write" in
+
+      Fmt.epr "Leave with %a.\n%!" pp_jump !jump ;
+
       d.hold <- Nativeint.to_int !hold ;
       d.bits <- !bits ;
       d.i_pos <- !i_pos ;
@@ -722,8 +769,8 @@ module M = struct
       d.o_pos <- !o_pos ;
 
       if d.last
-      then ( d.s <- Checkseum
-           ; checksum d )
+      then ( d.s <- End_of_inflate
+           ; End )
       else ( d.s <- Header
            ; K )
 
@@ -735,18 +782,25 @@ module M = struct
     d.s <- Inflate ; (* allocation *)
     inflate lit dist Length d
 
+  (* XXX(dinosaure): [huffman] can raise an exception. *)
   let make_table t hlit hdist d =
-    let t_lit, l_lit = huffman t 0 hlit in
-    let t_dist, l_dist = huffman t hlit hdist in
+    try
+      if t.(256) == 0 then raise Invalid_huffman ;
 
-    let lit = Lookup.make t_lit l_lit in
-    let dist = Lookup.make t_dist l_dist in
+      let t_lit, l_lit = huffman LENS t 0 hlit in
+      let t_dist, l_dist = huffman DISTS t hlit hdist in
 
-    d.literal <- lit ;
-    d.distance <- dist ;
-    d.jump <- Length ;
-    d.s <- Inflate ; (* allocation *)
-    inflate lit dist Length d
+      let lit = Lookup.make t_lit l_lit in
+      let dist = Lookup.make t_dist l_dist in
+
+      d.literal <- lit ;
+      d.distance <- dist ;
+      d.jump <- Length ;
+      d.s <- Inflate ; (* allocation *)
+      inflate lit dist Length d
+    with Invalid_huffman ->
+      Fmt.epr "Invalid dictionary.\n" ;
+      err_invalid_dictionary d
 
   let inflate_table d =
     let[@warning "-8"] Inflate_table { t; l= max_bits; r= res; h= (hlit, hdist, _) } = d.s in
@@ -822,14 +876,18 @@ module M = struct
       incr i ;
     done ;
 
-    let t, l = huffman res 0 19 in
+    try
+      let t, l = huffman CODES res 0 19 in
 
-    d.hold <- !hold ;
-    d.bits <- !bits ;
-    d.s <- Inflate_table { t; l
-                         ; r= Array.make (hlit + hdist) 0
-                         ; h= (hlit, hdist, hclen) } ;
-    inflate_table d
+      d.hold <- !hold ;
+      d.bits <- !bits ;
+      d.s <- Inflate_table { t; l
+                           ; r= Array.make (hlit + hdist) 0
+                           ; h= (hlit, hdist, hclen) } ;
+      inflate_table d
+    with Invalid_huffman ->
+      Fmt.epr "Invalid inflated dictionary.\n" ;
+      err_invalid_dictionary d
 
   let dynamic d =
     let l_header d =
@@ -880,10 +938,11 @@ module M = struct
   let dst_rem d = bigstring_length d.o - d.o_pos
   let flush d = d.o_pos <- 0
 
-  let decoder src o w =
+  let decoder src ~o ~w =
     let i, i_pos, i_len = match src with
       | `Manual -> bigstring_empty, 1, 0
-      | `Channel _ | `String _ -> assert false in
+      | `String x -> bigstring_of_string x, 0, String.length x - 1
+      | `Channel _ -> assert false in
     { src
     ; i
     ; i_pos
