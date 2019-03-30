@@ -310,6 +310,7 @@ module M = struct
                        ; h : int * int * int }
     | Inflate
     | Slow
+    | Flat_header
     | Flat
     | Checkseum
     | End_of_inflate
@@ -494,6 +495,7 @@ module M = struct
   let flat d =
     let len = min (min (i_rem d) d.l) (bigstring_length d.o - d.o_pos) in
     Window.blit d.w d.i d.i_pos d.o d.o_pos len ;
+
     d.o_pos <- d.o_pos + len ;
     d.i_pos <- d.i_pos + len ;
     d.l <- d.l - len ;
@@ -896,7 +898,7 @@ module M = struct
         let last = d.hold land 1 == 1 in
         let k =
           match (d.hold land 0x6) lsr 1 with
-          | 0 -> flat_header
+          | 0 -> d.k <- flat_header ; d.k
           | 1 -> fixed
           | 2 -> dynamic
           | 3 -> err_invalid_kind_of_block
@@ -913,9 +915,10 @@ module M = struct
       then inflate d.literal d.distance d.jump d
       else slow_inflate d.literal d.distance d.jump d
     | Slow -> d.k d
+    | Flat_header -> d.k d
     | Flat -> flat d
     | Checkseum -> d.k d
-    | End_of_inflate -> d.k d
+    | End_of_inflate -> End
 
   let rec decode d = match decode_k d with
     | Await -> `Await

@@ -72,6 +72,7 @@ let invalid_distance_code () =
   let decoder = Z.M.decoder (`String "\x02\x7e\xff\xff") ~o ~w in
   Alcotest.(check decode) "invalid distance code"
     (Z.M.decode decoder) `Flush ;
+  Fmt.epr "dst_rem: %d.\n%!" (Z.M.dst_rem decoder) ;
   Alcotest.(check string) "non-corrupted output"
     "" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 (* XXX(dinosaure): see [Z.M.base_dist]'s comment about this behavior. *)
@@ -82,6 +83,47 @@ let invalid_distance_too_far_back () =
   Alcotest.(check decode) "invalid distance too far back"
     (Z.M.decode decoder) `Flush
 (* XXX(dinosaure): see [Invalid_distance] about this kind of input. *)
+
+let fixed () =
+  Alcotest.test_case "fixed" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x03\x00") ~o ~w in
+  Alcotest.(check decode) "fixed"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "empty"
+    "" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let stored () =
+  Alcotest.test_case "stored" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x01\x01\x00\xfe\xff\x00") ~o ~w in
+  Alcotest.(check decode) "stored"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "0x00"
+    "\x00" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let length_extra () =
+  Alcotest.test_case "length extra" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\xed\xc0\x01\x01\x00\x00\x00\x40\x20\xff\x57\x1b\x42\x2c\x4f") ~o ~w in
+  Alcotest.(check decode) "length extra"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "0x00 * 516"
+    (String.make 516 '\x00') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let long_distance_and_extra () =
+  Alcotest.test_case "long distance and extra" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\xed\xcf\xc1\xb1\x2c\x47\x10\xc4\x30\xfa\x6f\x35\x1d\x01\x82\x59\x3d\xfb\xbe\x2e\x2a\xfc\x0f\x0c") ~o ~w in
+  Alcotest.(check decode) "long distance and extra"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "0x00 * 518"
+    (String.make 518 '\x00') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let window_end () =
+  Alcotest.test_case "window end" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\xed\xc0\x81\x00\x00\x00\x00\x80\xa0\xfd\xa9\x17\xa9\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x06") ~o ~w in
+  Alcotest.(check decode) "window end"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Fmt.epr "%S.\n%!" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder)) ;
+  Alcotest.(check string) "0x00 * 33025"
+    (String.make 33025 '\x00') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
 let () =
   Alcotest.run "z"
@@ -94,4 +136,9 @@ let () =
                   ; invalid_distances ()
                   ; too_many_length_or_distance_symbols ()
                   ; invalid_distance_code ()
-                  ; invalid_distance_too_far_back () ] ]
+                  ; invalid_distance_too_far_back () ]
+    ; "valids", [ fixed ()
+                ; stored ()
+                ; length_extra ()
+                ; long_distance_and_extra ()
+                ; window_end () ] ]
