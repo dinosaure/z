@@ -121,9 +121,24 @@ let window_end () =
   let decoder = Z.M.decoder (`String "\xed\xc0\x81\x00\x00\x00\x00\x80\xa0\xfd\xa9\x17\xa9\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x06") ~o ~w in
   Alcotest.(check decode) "window end"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
-  Fmt.epr "%S.\n%!" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder)) ;
   Alcotest.(check string) "0x00 * 33025"
     (String.make 33025 '\x00') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz0 () =
+  Alcotest.test_case "fuzz0" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "{\220\n s\017\027\211\\\006\211w\176`\142\2007\156oZBo\163\136\017\247\158\247\012e\241\234sn_$\210\223\017\213\138\147]\129M\137<\242\1867\021 c\194\156\135\194\167-wo\006\200\198") ~o ~w in
+  Alcotest.(check decode) "fuzz0"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz0"
+    "\xe3\x85" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz1 () =
+  Alcotest.test_case "fuzz1" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\019\208nO\200\189r\020\176")  ~o ~w in
+  Alcotest.(check decode) "fuzz1"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz1"
+    "\016+\135`m\212\197" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
 let () =
   Alcotest.run "z"
@@ -141,4 +156,6 @@ let () =
                 ; stored ()
                 ; length_extra ()
                 ; long_distance_and_extra ()
-                ; window_end () ] ]
+                ; window_end () ]
+    ; "fuzz", [ fuzz0 ()
+              ; fuzz1 () ] ]

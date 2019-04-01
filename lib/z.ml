@@ -31,6 +31,8 @@ let slow_blit2 src src_off dst0 dst0_off dst1 dst1_off len =
     unsafe_set_uint8 dst1 (dst1_off + i) v ;
   done
 
+(* XXX(dinosaure): fast blit when it's possible. *)
+
 let blit2 src src_off dst0 dst0_off dst1 dst1_off len =
   if dst0_off - src_off < 4
   then slow_blit2 src src_off dst0 dst0_off dst1 dst1_off len
@@ -53,6 +55,8 @@ let blit2 src src_off dst0 dst0_off dst1 dst1_off len =
       unsafe_set_uint8 dst0 (dst0_off + i) v ;
       unsafe_set_uint8 dst1 (dst1_off + i) v ;
     done
+
+(* XXX(dinosaure): fast fill operation. (usually when [Match (len:?, dist:1)]) *)
 
 let fill2 v dst0 dst0_off dst1 dst1_off len =
   let len0 = len land 3 in
@@ -78,6 +82,8 @@ let fill2 v dst0 dst0_off dst1 dst1_off len =
   done
 
 let io_buffer_size = 65536
+
+(* XXX(dinosaure): Specialization. *)
 
 external ( < ) : 'a -> 'a -> bool = "%lessthan"
 external ( <= ) : 'a -> 'a -> bool = "%lessequal"
@@ -178,6 +184,8 @@ module Window = struct
     t.w <- t.w + 1
 
   let have t = t.w land max
+  (* XXX(dinosaure): this is wrong. It's true for the first run, but then,
+     should be equal to [1 lsl 15] evry times. *)
 
   let blit t w w_off o o_off len =
     let msk = mask t.w in
@@ -505,7 +513,11 @@ module M = struct
            then ( d.s <- End_of_inflate ; End )
            else ( d.s <- Header ; K ) )
     else match i_rem d, bigstring_length d.o - d.o_pos with
-      | 0, _ -> Await
+      | 0, _ ->
+        ( match d.src with
+          | `String _ -> eoi d ; err_unexpected_end_of_input d
+          | `Channel _ -> assert false (* TODO *)
+          | `Manual -> Await)
       | _, 0 -> Flush
       | _, _ -> assert false
 
@@ -753,7 +765,16 @@ module M = struct
       d.k <- slow_inflate lit dist !jump ; (* allocation *)
       d.s <- Slow ;
 
-      if i_rem d > 0 then Flush else Await
+      if i_rem d > 0 then Flush else ( match d.src with
+          | `String _ -> eoi d ; K
+          (* XXX(dinosaure): [K] is required here mostly because the semantic of
+             the hot-loop. If we reach end of input, we may have some trailing
+             bits in [d.hold] and we need to process them.
+
+             [slow_inflate] is more precise (but... slow) and will consume them
+             to reach [End_of_inflate] then correctly. *)
+          | `Channel _ -> assert false (* TODO *)
+          | `Manual -> Await )
     with End ->
       d.hold <- Nativeint.to_int !hold ;
       d.bits <- !bits ;
@@ -778,6 +799,8 @@ module M = struct
   let make_table t hlit hdist d =
     try
       if t.(256) == 0 then raise Invalid_huffman ;
+      (* XXX(dinosaure): an huffman tree MUST have at least an End-Of-Block
+         symbol. *)
 
       let t_lit, l_lit = huffman LENS t 0 hlit in
       let t_dist, l_dist = huffman DISTS t hlit hdist in
@@ -893,12 +916,13 @@ module M = struct
 
   let decode_k d = match d.s with
     | Header ->
+      (* XXX(dinosaure): check this code, we should need a [k]ontinuation. *)
       let l_header d =
         assert (d.bits >= 3) ; (* allocation *)
         let last = d.hold land 1 == 1 in
         let k =
           match (d.hold land 0x6) lsr 1 with
-          | 0 -> d.k <- flat_header ; d.k
+          | 0 -> flat_header
           | 1 -> fixed
           | 2 -> dynamic
           | 3 -> err_invalid_kind_of_block
@@ -906,6 +930,7 @@ module M = struct
         d.last <- last ;
         d.hold <- d.hold lsr 3 ;
         d.bits <- d.bits - 3 ;
+        d.k <- k ;
         k d in
       c_peek_bits 3 l_header d
     | Table { hclen; _ } -> c_peek_bits (hclen * 3) table d

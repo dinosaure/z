@@ -1,0 +1,3 @@
+(executable
+ (name fuzz)
+ (libraries camlzip checkseum.c z crowbar))
