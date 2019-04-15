@@ -8,6 +8,6 @@
  (action (progn
           (chdir zlib (bash "./configure"))
           (chdir zlib (bash "make"))
-          (copy zlib/libz.a libzl_stubs.a)
-          (copy zlib/libz.so dllzl_stubs.so))))
+          (bash "cp zlib/libz.a libzl_stubs.a")
+          (bash "cp zlib/libz.so dllzl_stubs.so"))))
 

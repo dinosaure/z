@@ -206,12 +206,15 @@ let fuzz5 () =
   let input =
     [ "\x93\x3a\x55\x01\x01\x01\x01\xe6\x01\x01\x01\x01\x01\x01\x01\x01" (* .:U............. *)
     ; "\x01\x01\x01\x01\x01\x00\x00"                                     (* ....... *)          ] in
+  let expected_output =
+    [ "\x1a\xca\x78\x78\x78\x78\x78\x78\x78\x50\x50\x37\x50\x50\x50\x50" (* ..xxxxxxxPP7PPPP *)
+    ; "\x50\x50\x50\x50\x50\x50\x50\x50\x50"                             (* PPPPPPPPP *)        ] in
   Alcotest.test_case "fuzz5" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String (String.concat "" input)) ~o ~w in
   Alcotest.(check decode) "fuzz5"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
   Alcotest.(check string) "fuzz5"
-    "" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.concat "" expected_output) (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
 let () =
   Alcotest.run "z"
