@@ -1,0 +1,8 @@
+(library
+ (name camlzip)
+ (wrapped false)
+ (modules gzip zip zlib)
+ (flags (:standard -linkall -w -27-35-50))
+ (c_names zlibstubs)
+ (c_flags (:standard) (-I c/zlib))
+ (libraries zl unix))

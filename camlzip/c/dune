@@ -1,0 +1,13 @@
+(library
+ (name zl)
+ (self_build_stubs_archive (zl)))
+
+(rule
+ (targets libzl_stubs.a dllzl_stubs.so)
+ (deps (source_tree zlib))
+ (action (progn
+          (chdir zlib (bash "./configure"))
+          (chdir zlib (bash "make"))
+          (copy zlib/libz.a libzl_stubs.a)
+          (copy zlib/libz.so dllzl_stubs.so))))
+
