@@ -216,6 +216,32 @@ let fuzz5 () =
   Alcotest.(check string) "fuzz5"
     (String.concat "" expected_output) (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
+let fuzz6 () =
+  let expected_output =
+    [ "\x19\x59\x59\x59\x5e\xe3\x59\x5e\xe3\x59\x5e\xe3\x59\x5e\xe3\x59" (* .YYY^.Y^.Y^.Y^.Y *)
+    ; "\x5e\xe3\x33"                                                     (* ^.3 *)              ] in
+  Alcotest.test_case "fuzz6" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x93\x8c\x8c\x8c\x8c\x7b\x8c\x8c\x8c\x01\x00\x00") ~o ~w in
+  Alcotest.(check decode) "fuzz6"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz6"
+    (String.concat "" expected_output) (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz7 () =
+  Alcotest.test_case "fuzz7" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x93\x3a\x55\x69\x12\x3a\x3f\x10\x08\x01\x00\x00") ~o ~w in
+  Alcotest.(check decode) "fuzz7"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz7"
+    "\x1a\xca\x79\x34\x55\x9f\x51\x9f\x51\x9f"
+    (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz8 () =
+  Alcotest.test_case "fuzz8" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x7a\x37\x6d\x99\x13") ~o ~w in
+  Alcotest.(check decode) "fuzz8"
+    (Z.M.decode decoder) (`Malformed "Unexpected end of input")
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -238,4 +264,7 @@ let () =
               ; fuzz2 ()
               ; fuzz3 ()
               ; fuzz4 ()
-              ; fuzz5 () ] ]
+              ; fuzz5 ()
+              ; fuzz6 ()
+              ; fuzz7 ()
+              ; fuzz8 () ] ]
