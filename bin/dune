@@ -8,3 +8,8 @@
  (name pipe)
  (modules pipe)
  (libraries checkseum.c z bs cmdliner))
+
+(executable
+ (name example)
+ (modules example)
+ (libraries checkseum.c z))

@@ -67,8 +67,8 @@ let pp_string = pp_scalar ~get:String.get ~length:String.length
 
 let () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.bytes ] @@ fun bytes ->
+  Fmt.epr "Test %S.\n%!" bytes ;
   let res0 = zlib bytes in
-
   Fmt.epr "Process %S.\n%!" bytes ;
   let res1 = z bytes in
   Fmt.epr "Check %S.\n%!" bytes ;

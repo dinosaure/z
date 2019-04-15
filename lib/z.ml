@@ -14,7 +14,15 @@ let bigstring_of_string x = Bigstringaf.of_string ~off:0 ~len:(String.length x) 
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
-external unsafe_get_uint26 : bigstring -> int -> int = "%caml_ba_ref_1" (* TODO *)
+
+external unsafe_set_uint16 : bigstring -> int -> int -> unit = "%caml_bigstring_set16"
+external swap : int -> int ="%bswap16"
+
+(* XXX(dinosaure): little-endian only *)
+let unsafe_set_uint16 =
+  if not Sys.big_endian
+  then fun buf off v -> unsafe_set_uint16 buf off v
+  else fun buf off v -> unsafe_set_uint16 buf off (swap v)
 
 external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
 external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
@@ -835,7 +843,8 @@ module M = struct
         d.bits <- d.bits - n ;
         k v d in
       c_peek_bits n k d in
-    let ret r d = make_table r hlit hdist d in
+    let ret r d =
+      make_table r hlit hdist d in
     (* XXX(dinosaure): [prv] and [i] are stored as associated env of [go]. We
        can not retake them from [d.s]. *)
     let rec go prv i v d =
@@ -1321,6 +1330,15 @@ module N = struct
 
   (* XXX(dinosaure): this part needs a big check. *)
 
+  type literals = int array
+  type distances = int array
+
+  let make_literals () =
+    let res = Array.make 286 0 in
+    res.(256) <- 1 ; res
+
+  let make_distances () = Array.make 30 0
+
   let dynamic_of_frequencies
     : literals:int array -> distances:int array -> dynamic
     = fun ~literals:lit_freqs ~distances:dst_freqs ->
@@ -1373,12 +1391,14 @@ module N = struct
   type encoder =
     { dst : dst
     ; blk : block
+    ; lst : bool
     ; mutable hold : int
     ; mutable bits : int
     ; mutable o : bigstring
     ; mutable o_pos : int
     ; mutable o_max : int
     ; mutable f_pos : int
+    ; w : Window.t
     ; t : bigstring
     ; mutable t_pos : int
     ; mutable t_max : int
@@ -1433,11 +1453,26 @@ module N = struct
       if rem < len then ( t_range e (len - 1) ; e.t, 0, t_flush k )
       else let j = e.o_pos in ( e.o_pos <- e.o_pos + len ; e.o, j, k ) in
     for i = 0 to len - 1
-    do unsafe_set_uint8 s (j + i) (e.hold land 0xff)
+    do ()
+     ; unsafe_set_uint8 s (j + i) (e.hold land 0xff)
      ; e.hold <- e.hold lsr 8
     done ;
     e.bits <- e.bits - (len * 8) ;
     k e
+
+  let f_encode k e =
+    let k e =
+      assert (e.bits <= 8) ;
+
+      if e.bits == 0 then k e
+      else
+        let rem = o_rem e in
+        let s, j, k =
+          if rem < 1 then ( t_range e 0 ; e.t, 0, t_flush k )
+          else let j = e.o_pos in ( e.o_pos <- e.o_pos + 1 ; e.o, j, k ) in
+        unsafe_set_uint8 s j (e.hold land ((1 lsl e.bits) - 1)) ;
+      e.bits <- 0 ; e.hold <- 0 ; flush k e in
+    w_encode k e
 
   let w_flat _ = assert false
 
@@ -1512,9 +1547,13 @@ module N = struct
     let k e = e.k <- encode ; `Ok in
     match v, e.blk with
     | `Await, _ -> k e
-    | `End, _ -> flush k e
+    | `End, Dynamic dynamic ->
+      let len, v = Lookup.get dynamic.ltree 256 in
+      e.hold <- (v lsl e.bits) lor e.hold ;
+      e.bits <- e.bits + len ;
+      f_encode k e (* [f_encode] calls [flush]. *)
     | `Literal code, Dynamic dynamic ->
-      let v, len = Lookup.get dynamic.ltree code in
+      let len, v = Lookup.get dynamic.ltree code in
 
       let k e =
         e.hold <- (v lsl e.bits) lor e.hold ;
@@ -1523,16 +1562,17 @@ module N = struct
 
       if e.bits > _flush_hold_len then w_encode k e else k e
     | `Copy (off, len), Dynamic dynamic ->
-      let v0, len0 = Lookup.get dynamic.ltree (_length.(len) + 256 + 1) in
-      let v1, len1 =
+      let len0, v0 = Lookup.get dynamic.ltree (_length.(len) + 256 + 1) in
+      let len1, v1 =
         let code = _length.(len) in
         len - _base_length.(code), _extra_lbits.(code) in
-      let v2, len2 = Lookup.get dynamic.dtree (_distance off) in
-      let v3, len3 =
+      let len2, v2 = Lookup.get dynamic.dtree (_distance off) in
+      let len3, v3 =
         let code = _distance off in
         off - _base_dist.(code), _extra_dbits.(code) in
 
       (* XXX(dinosaure): a really slow writer.
+         [20   + 5    + 15   + 13]
          [len0 + len1 + len2 + len3 <= 48] so we have 2 problems:
          - [e.hold] is full, so we need to flush it (see [w_encode]).
          - it's a 32-bits machine, so we can not store [length] ([v0] and [v1])
@@ -1569,4 +1609,91 @@ module N = struct
           ; k e )
     | `Copy _, Flat _ -> Fmt.invalid_arg "Impossible to store a copy code inner a flat block"
     | _, _ -> assert false
+
+  let rec c_bytes bytes k e =
+    let rem = o_rem e in
+    if rem < 2
+    then flush (fun e -> c_bytes bytes k e) e
+    else
+      ( unsafe_set_uint16 e.o e.o_pos bytes
+      ; e.o_pos <- e.o_pos + 2
+      ; k e )
+
+  let rec c_bits bits long k e =
+    if e.bits + long < Sys.word_size - 1
+    then ( e.hold <- (bits lsl e.bits) lor e.hold
+         ; e.bits <- e.bits + long
+         ; k e )
+    else
+      let k e =
+        e.hold <- e.hold lsr 16 ;
+        e.bits <- e.bits - 16 ;
+        c_bits bits long k e in
+      c_bytes (e.hold land 0xffff) k e
+
+  let encode_huffman dynamic e =
+    let def_symbols, def_codes, def_lengths = dynamic.deflated in
+    let rec go i e =
+      if i == Array.length def_symbols
+      then ( e.k <- encode
+           ; `Ok )
+      else
+        let code = def_symbols.(i) in
+        let k e =
+          if code >= 16
+          then
+            let len = match code with
+              | 16 -> 2 | 17 -> 3 | 18 -> 7 | _ -> assert false in
+            c_bits def_symbols.(succ i) len (fun e -> go (i + 2) e) e
+          else go (succ i) e in
+        c_bits def_codes.(code) def_lengths.(code) k e in
+    go 0 e
+
+  let encode_zigzag dynamic e =
+    let rec go i e =
+      if i == dynamic.h_len
+      then encode_huffman dynamic e
+      else c_bits dynamic.zigzag.(i) 3 (fun e -> go (succ i) e) e in
+    go 0 e
+
+  let encode_dynamic_header dynamic e =
+    let last = if e.lst then 0x1 else 0x0 in
+    let kind = 0x2 in
+    let hold =
+      ((dynamic.h_len - 4) lsl 13) lor
+      ((dynamic.h_dst - 1) lsl 8)  lor
+      ((dynamic.h_lit - 257) lsl 3)  lor
+      (kind lsl 1)           lor last in
+    let k e =
+      e.hold <- (hold lsl e.bits) lor e.hold ;
+      e.bits <- e.bits + 17 ;
+      encode_zigzag dynamic e in
+    if e.bits > Sys.word_size - 1 - 17 then encode_zigzag dynamic e else k e
+
+  let dst_rem = o_rem
+
+  let encoder ?(last= true) dst block ~w =
+    let o, o_pos, o_max = match dst with
+      | `Manual -> bigstring_empty, 1, 0
+      | `Buffer _
+      | `Channel _ -> bigstring_create io_buffer_size, 0, io_buffer_size - 1 in
+    let k e _ = match block with
+      | Dynamic dynamic -> encode_dynamic_header dynamic e
+      | _ -> assert false in
+    { dst
+    ; blk= block
+    ; lst= last
+    ; hold= 0
+    ; bits= 0
+    ; o
+    ; o_pos
+    ; o_max
+    ; f_pos= 0
+    ; w= Window.from w
+    ; t= bigstring_create 4
+    ; t_pos= 1
+    ; t_max= 0
+    ; k }
+
+  let encode e = e.k e
 end
