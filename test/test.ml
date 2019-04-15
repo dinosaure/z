@@ -110,7 +110,8 @@ let length_extra () =
 
 let long_distance_and_extra () =
   Alcotest.test_case "long distance and extra" `Quick @@ fun () ->
-  let decoder = Z.M.decoder (`String "\xed\xcf\xc1\xb1\x2c\x47\x10\xc4\x30\xfa\x6f\x35\x1d\x01\x82\x59\x3d\xfb\xbe\x2e\x2a\xfc\x0f\x0c") ~o ~w in
+  let decoder = Z.M.decoder (`String "\xed\xcf\xc1\xb1\x2c\x47\x10\xc4\x30\xfa\x6f\x35\x1d\x01\x82\x59\x3d\xfb\
+                                      \xbe\x2e\x2a\xfc\x0f\x0c") ~o ~w in
   Alcotest.(check decode) "long distance and extra"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
   Alcotest.(check string) "0x00 * 518"
@@ -118,7 +119,9 @@ let long_distance_and_extra () =
 
 let window_end () =
   Alcotest.test_case "window end" `Quick @@ fun () ->
-  let decoder = Z.M.decoder (`String "\xed\xc0\x81\x00\x00\x00\x00\x80\xa0\xfd\xa9\x17\xa9\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x06") ~o ~w in
+  let decoder = Z.M.decoder (`String "\xed\xc0\x81\x00\x00\x00\x00\x80\xa0\xfd\xa9\x17\xa9\x00\x00\x00\x00\x00\
+                                      \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+                                      \x00\x00\x00\x00\x00\x00\x00\x00\x00\x06") ~o ~w in
   Alcotest.(check decode) "window end"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
   Alcotest.(check string) "0x00 * 33025"
@@ -126,7 +129,9 @@ let window_end () =
 
 let fuzz0 () =
   Alcotest.test_case "fuzz0" `Quick @@ fun () ->
-  let decoder = Z.M.decoder (`String "{\220\n s\017\027\211\\\006\211w\176`\142\2007\156oZBo\163\136\017\247\158\247\012e\241\234sn_$\210\223\017\213\138\147]\129M\137<\242\1867\021 c\194\156\135\194\167-wo\006\200\198") ~o ~w in
+  let decoder = Z.M.decoder (`String "{\220\n s\017\027\211\\\006\211w\176`\142\2007\156oZBo\163\136\017\247\
+                                      \158\247\012e\241\234sn_$\210\223\017\213\138\147]\129M\137<\242\1867\021\
+                                      c\194\156\135\194\167-wo\006\200\198") ~o ~w in
   Alcotest.(check decode) "fuzz0"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
   Alcotest.(check string) "fuzz0"
@@ -134,11 +139,79 @@ let fuzz0 () =
 
 let fuzz1 () =
   Alcotest.test_case "fuzz1" `Quick @@ fun () ->
-  let decoder = Z.M.decoder (`String "\019\208nO\200\189r\020\176")  ~o ~w in
+  let decoder = Z.M.decoder (`String "\019\208nO\200\189r\020\176") ~o ~w in
   Alcotest.(check decode) "fuzz1"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
   Alcotest.(check string) "fuzz1"
     "\016+\135`m\212\197" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz2 () =
+  let expected_output =
+    [ "\x1a\xca\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e" (* ..~~~~~~~~~~~~~~ *)
+    ; "\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e" (* ~~~~~~~~~~~~~~~~ *)
+    ; "\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e" (* ~~~~~~~~~~~~~~~~ *)
+    ; "\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x3a\x2c\x50"                     (* ~~~~~~~~:,P *)      ] in
+  Alcotest.test_case "fuzz2" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x93\x3a\x55\x47\x12\x80\x51\x56\x3a\x01\x00\x00") ~o ~w in
+  Alcotest.(check decode) "fuzz2"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz2"
+    (String.concat "" expected_output)
+    (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz3 () =
+  let expected_output =
+    [ "\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a" (* ..~..~..~..~..~. *)
+    ; "\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca" (* .~..~..~..~..~.. *)
+    ; "\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e" (* ~..~..~..~..~..~ *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76\xc8\x76" (* .v.v.v.v.v.v.v.v *)
+    ; "\xc8\x76\xc8\x76"                                                 (* .v.v *)             ] in
+  Alcotest.test_case "fuzz3" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x93\x3a\x55\x47\x12\x3a\x51\x36\x0a\x01\x00\x00") ~o ~w in
+  Alcotest.(check decode) "fuzz3"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz3"
+    (String.concat "" expected_output)
+    (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz4 () =
+  let expected_output =
+    [ "\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a" (* ..~..~..~..~..~. *)
+    ; "\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca" (* .~..~..~..~..~.. *)
+    ; "\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e\x1a\xca\x7e" (* ~..~..~..~..~..~ *)
+    ; "\xc8\x76\x75\x75\x75\x75\x75\x75"                                 (* .vuuuuuu *)         ] in
+  Alcotest.test_case "fuzz4" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String "\x93\x3a\x55\x47\x12\x3a\x51\x56\x0a\x06\x80\x00") ~o ~w in
+  Alcotest.(check decode) "fuzz4"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz4"
+    (String.concat "" expected_output) (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+
+let fuzz5 () =
+  let input =
+    [ "\x93\x3a\x55\x01\x01\x01\x01\xe6\x01\x01\x01\x01\x01\x01\x01\x01" (* .:U............. *)
+    ; "\x01\x01\x01\x01\x01\x00\x00"                                     (* ....... *)          ] in
+  Alcotest.test_case "fuzz5" `Quick @@ fun () ->
+  let decoder = Z.M.decoder (`String (String.concat "" input)) ~o ~w in
+  Alcotest.(check decode) "fuzz5"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "fuzz5"
+    "" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
 let () =
   Alcotest.run "z"
@@ -158,4 +231,8 @@ let () =
                 ; long_distance_and_extra ()
                 ; window_end () ]
     ; "fuzz", [ fuzz0 ()
-              ; fuzz1 () ] ]
+              ; fuzz1 ()
+              ; fuzz2 ()
+              ; fuzz3 ()
+              ; fuzz4 ()
+              ; fuzz5 () ] ]

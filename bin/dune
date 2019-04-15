@@ -13,3 +13,8 @@
  (name example)
  (modules example)
  (libraries checkseum.c z))
+
+(executable
+ (name zpipe)
+ (modules zpipe)
+ (libraries camlzip))

@@ -15,7 +15,7 @@ let pp_decode ppf = function
   | `Flush -> Fmt.string ppf "`Flush"
   | `Malformed err -> Fmt.pf ppf "(`Malformed %S)" err
 
-let encoder = Z.N.encoder (`Buffer res) (Z.N.Dynamic huffman) ~w
+let encoder = Z.N.encoder (`Buffer res) (Z.N.Dynamic huffman)
 let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal 0)
 let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal 0)
 let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal 0)

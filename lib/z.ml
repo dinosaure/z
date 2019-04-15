@@ -1398,7 +1398,6 @@ module N = struct
     ; mutable o_pos : int
     ; mutable o_max : int
     ; mutable f_pos : int
-    ; w : Window.t
     ; t : bigstring
     ; mutable t_pos : int
     ; mutable t_max : int
@@ -1631,12 +1630,12 @@ module N = struct
         c_bits bits long k e in
       c_bytes (e.hold land 0xffff) k e
 
-  let encode_huffman dynamic e =
+  let encode_huffman dynamic v e =
     let def_symbols, def_codes, def_lengths = dynamic.deflated in
     let rec go i e =
       if i == Array.length def_symbols
       then ( e.k <- encode
-           ; `Ok )
+           ; encode e v )
       else
         let code = def_symbols.(i) in
         let k e =
@@ -1649,36 +1648,36 @@ module N = struct
         c_bits def_codes.(code) def_lengths.(code) k e in
     go 0 e
 
-  let encode_zigzag dynamic e =
+  let encode_zigzag dynamic v e =
     let rec go i e =
       if i == dynamic.h_len
-      then encode_huffman dynamic e
+      then encode_huffman dynamic v e
       else c_bits dynamic.zigzag.(i) 3 (fun e -> go (succ i) e) e in
     go 0 e
 
-  let encode_dynamic_header dynamic e =
+  let encode_dynamic_header dynamic v e =
     let last = if e.lst then 0x1 else 0x0 in
     let kind = 0x2 in
     let hold =
-      ((dynamic.h_len - 4) lsl 13) lor
-      ((dynamic.h_dst - 1) lsl 8)  lor
-      ((dynamic.h_lit - 257) lsl 3)  lor
-      (kind lsl 1)           lor last in
+      ((dynamic.h_len - 4) lsl 13)  lor
+      ((dynamic.h_dst - 1) lsl 8)   lor
+      ((dynamic.h_lit - 257) lsl 3) lor
+      (kind lsl 1)                  lor last in
     let k e =
       e.hold <- (hold lsl e.bits) lor e.hold ;
       e.bits <- e.bits + 17 ;
-      encode_zigzag dynamic e in
-    if e.bits > Sys.word_size - 1 - 17 then encode_zigzag dynamic e else k e
+      encode_zigzag dynamic v e in
+    if e.bits > Sys.word_size - 1 - 17 then encode_zigzag dynamic v e else k e
 
   let dst_rem = o_rem
 
-  let encoder ?(last= true) dst block ~w =
+  let encoder ?(last= true) dst block =
     let o, o_pos, o_max = match dst with
       | `Manual -> bigstring_empty, 1, 0
       | `Buffer _
       | `Channel _ -> bigstring_create io_buffer_size, 0, io_buffer_size - 1 in
-    let k e _ = match block with
-      | Dynamic dynamic -> encode_dynamic_header dynamic e
+    let k e v = match block with
+      | Dynamic dynamic -> encode_dynamic_header dynamic v e
       | _ -> assert false in
     { dst
     ; blk= block
@@ -1689,7 +1688,6 @@ module N = struct
     ; o_pos
     ; o_max
     ; f_pos= 0
-    ; w= Window.from w
     ; t= bigstring_create 4
     ; t_pos= 1
     ; t_max= 0
