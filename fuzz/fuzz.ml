@@ -1,12 +1,15 @@
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
 
+exception End_of_input
+
 let zlib bytes =
   let off = ref 0 in
   let buf = Buffer.create 16 in
   try
     Zlib.uncompress ~header:false
       (fun ibuf ->
+         if String.length bytes - !off = 0 then raise End_of_input ;
          let len = min (Bytes.length ibuf) (String.length bytes - !off) in
          Bytes.blit_string bytes !off ibuf 0 len ;
          off := !off + len ; len)
@@ -14,6 +17,7 @@ let zlib bytes =
          Buffer.add_subbytes buf obuf 0 len) ;
     Buffer.contents buf
   with Zlib.Error _ -> Crowbar.bad_test ()
+     | End_of_input -> Crowbar.bad_test ()
 
 let z bytes =
   let decoder = Z.M.decoder (`String bytes) ~o ~w in
