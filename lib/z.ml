@@ -191,9 +191,15 @@ module Window = struct
     if mask (t.w + 1) == 0 then update t ;
     t.w <- t.w + 1
 
-  let have t = t.w land max
-  (* XXX(dinosaure): this is wrong. It's true for the first run, but then,
-     should be equal to [1 lsl 15] evry times. *)
+  let sub a b = ( - ) a b
+
+  let compare a b =
+    (compare : int -> int -> int) (sub a min_int) (sub b min_int)
+
+  let have t =
+    if compare t.w max < 0 then t.w else max
+  (* XXX(dinosaure): this code works only for an deflated input less than
+     [max_int] bytes. *)
 
   let blit t w w_off o o_off len =
     let msk = mask t.w in
@@ -371,6 +377,10 @@ module M = struct
   let err_invalid_complement_of_length d =
     eoi d ; d.k <- final ;
     malformedf "Invalid complement of length"
+
+  let err_invalid_distance d =
+    eoi d ; d.k <- final ;
+    malformedf "Invalid distance"
 
   (* remaining bytes to read [d.i]. *)
   let i_rem d = d.i_len - d.i_pos + 1
@@ -571,7 +581,7 @@ module M = struct
      fall to [Match (len:?, dist:0)] (so, nothing to do).
 
      Case can be retrieved with "\x02\x7e\xff\xff". NOTE: [miniz] has this
-     behavior. *)
+     silent behavior. *)
 
   let rec c_put_byte byte k d =
     if d.o_pos < bigstring_length d.o
@@ -641,22 +651,25 @@ module M = struct
         K in
       c_peek_bits len k d
     | Write ->
-      let len = min d.l (bigstring_length d.o - d.o_pos) in
-      let off = Window.mask (d.w.Window.w - d.d) in
-      let pre = Window.max - off in
-      let rst = len - pre in
-      if rst > 0
-      then ( Window.blit d.w d.w.Window.raw off d.o d.o_pos pre
-               ; Window.blit d.w d.w.Window.raw 0 d.o (d.o_pos + pre) rst )
-      else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
-      d.o_pos <- d.o_pos + len ;
-      if d.l - len == 0
-      then ( d.jump <- Length
-           ; d.s <- Inflate (* allocation *)
-           ; K )
-      else ( d.l <- d.l - len
-           ; d.s <- Inflate (* allocation *)
-           ; Flush )
+      if d.d > Window.have d.w
+      then err_invalid_distance d
+      else
+        let len = min d.l (bigstring_length d.o - d.o_pos) in
+        let off = Window.mask (d.w.Window.w - d.d) in
+        let pre = Window.max - off in
+        let rst = len - pre in
+        if rst > 0
+        then ( Window.blit d.w d.w.Window.raw off d.o d.o_pos pre
+                ; Window.blit d.w d.w.Window.raw 0 d.o (d.o_pos + pre) rst )
+        else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
+        d.o_pos <- d.o_pos + len ;
+        if d.l - len == 0
+        then ( d.jump <- Length
+            ; d.s <- Inflate (* allocation *)
+            ; K )
+        else ( d.l <- d.l - len
+            ; d.s <- Inflate (* allocation *)
+            ; Flush )
 
   exception End
   exception Invalid_distance
@@ -746,6 +759,8 @@ module M = struct
 
           jump := Write
         | Write ->
+          if d.d > Window.have d.w then raise Invalid_distance ;
+
           let len = min d.l (bigstring_length d.o - !o_pos) in
           let off = Window.mask (d.w.Window.w - d.d) in
 
@@ -794,6 +809,7 @@ module M = struct
            ; End )
       else ( d.s <- Header
            ; K )
+       | Invalid_distance -> err_invalid_distance d
 
   let fixed d =
     let lit, dist = fixed_lit, fixed_dist in
@@ -928,9 +944,10 @@ module M = struct
       (* XXX(dinosaure): check this code, we should need a [k]ontinuation. *)
       let l_header d =
         assert (d.bits >= 3) ; (* allocation *)
+
         let last = d.hold land 1 == 1 in
         let k =
-          match (d.hold land 0x6) lsr 1 with
+          match (d.hold land 0x6) asr 1 with
           | 0 -> flat_header
           | 1 -> fixed
           | 2 -> dynamic

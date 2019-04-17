@@ -81,8 +81,9 @@ let invalid_distance_too_far_back () =
   Alcotest.test_case "invalid distance too far back" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\x0c\xc0\x81\x00\x00\x00\x00\x00\x90\xff\x6b\x04\x00") ~o ~w in
   Alcotest.(check decode) "invalid distance too far back"
-    (Z.M.decode decoder) `Flush
-(* XXX(dinosaure): see [Invalid_distance] about this kind of input. *)
+    (Z.M.decode decoder) `Flush ;
+  Alcotest.(check decode) "invalid distance too far back"
+    (Z.M.decode decoder) (`Malformed "Invalid distance")
 
 let fixed () =
   Alcotest.test_case "fixed" `Quick @@ fun () ->
@@ -242,6 +243,18 @@ let fuzz8 () =
   Alcotest.(check decode) "fuzz8"
     (Z.M.decode decoder) (`Malformed "Unexpected end of input")
 
+let fuzz9 () =
+  Alcotest.test_case "fuzz9" `Quick @@ fun () ->
+  let inputs =
+    [ "\x9b\x01\x95\xfc\x51\xd2\xed\xc8\xce\xc8\xff\x80\x00\x00\x7f\xff" (* ....Q........... *)
+    ; "\x79\x2f\xe9\x51\x88\x7b\xb8\x2f\xef\xa5\x8c\xf8\xf1\xb6\xce\xc8" (* y/.Q.{./........ *)
+    ; "\xb8\xc8\xff\x2f\x00\x7f\x88\x7b\xbc"                             (* .../...{. *)        ] in
+  let decoder = Z.M.decoder (`String (String.concat "" inputs)) ~o ~w in
+  Alcotest.(check decode) "fuzz9"
+    (Z.M.decode decoder) (`Malformed "Invalid distance")
+
+
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -267,4 +280,5 @@ let () =
               ; fuzz5 ()
               ; fuzz6 ()
               ; fuzz7 ()
-              ; fuzz8 () ] ]
+              ; fuzz8 ()
+              ; fuzz9 () ] ]

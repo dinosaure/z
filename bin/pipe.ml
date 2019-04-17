@@ -5,7 +5,6 @@ let o = Z.bigstring_create Z.io_buffer_size
 let i = Z.bigstring_create Z.io_buffer_size
 
 let run _ =
-  let[@warning "-8"] 2 = Bs.bigstring_input Unix.stdin zlib_header 0 2 in
   let decoder = Z.M.decoder `Manual ~o ~w in
   let rec go () = match Z.M.decode decoder with
     | `Await ->
