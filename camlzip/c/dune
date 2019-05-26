@@ -7,7 +7,7 @@
  (deps (source_tree zlib))
  (action (progn
           (chdir zlib (bash "./configure"))
-          (chdir zlib (bash "make CFLAGS+='-DZLIB_DEBUG -Dverbose=3'"))
+          (chdir zlib (bash "make CFLAGS+='-DDUMP_BL_TREE -DZLIB_DEBUG -Dverbose=3'"))
           (bash "cp zlib/libz.a libzl_stubs.a")
           (bash "cp zlib/libz.so dllzl_stubs.so"))))
 

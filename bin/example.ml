@@ -1,6 +1,9 @@
 let literals = Z.N.make_literals ()
-let () = literals.(Char.code '\000') <- 1
+let () = literals.(0) <- 2
+let () = literals.(284) <- 1
+let () = literals.(285) <- 1
 let distances = Z.N.make_distances ()
+let () = distances.(0) <- 2
 
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
@@ -16,11 +19,21 @@ let pp_decode ppf = function
   | `Malformed err -> Fmt.pf ppf "(`Malformed %S)" err
 
 let encoder = Z.N.encoder (`Buffer res) (Z.N.Dynamic huffman)
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal 0)
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal 0)
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal 0)
+let () = Fmt.epr "# dynamic huffman: done.\n%!"
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
+let () = Fmt.epr "# literal 00\n%!"
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
+let () = Fmt.epr "# literal 00\n%!"
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 258))
+let () = Fmt.epr "#\n%!"
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 256))
+let () = Fmt.epr "#\n%!"
 let[@warning "-8"] `Ok : res = Z.N.encode encoder `End
-let () = Fmt.pr "deflated: %S\n%!" (Buffer.contents res)
+let () = Fmt.epr "#\n%!"
+let () = Fmt.pr "deflated: @[<hov>%a@]\n%!" (Hxd_string.pp Hxd.O.default) (Buffer.contents res)
+
+(* We should have: "\xed\xc0\x01\x01\x00\x00\x00\x40\x20\xff\x57\x1b\x42\x2c\x4f" *)
+
 let decoder = Z.M.decoder (`String (Buffer.contents res)) ~o ~w
 let res = Z.M.decode decoder
 let () = Fmt.pr "> %a.\n%!" pp_decode res

@@ -15,7 +15,10 @@ let run _ =
       Bs.bigstring_output Unix.stdout o 0 len ; Z.M.flush decoder ; go ()
     | `Malformed err ->
       Fmt.epr "%s.\n%!" err ; `Error err
-    | `End -> `Ok () in
+    | `End ->
+      let len = Z.io_buffer_size - Z.M.dst_rem decoder in
+      if len > 0 then Bs.bigstring_output Unix.stdout o 0 len ;
+      `Ok () in
   go ()
 
 open Cmdliner
