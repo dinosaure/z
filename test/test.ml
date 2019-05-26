@@ -15,6 +15,15 @@ let decode =
     | _, _ -> false in
   Alcotest.testable pp equal
 
+let encode ~kind lst =
+  let res = Buffer.create 16 in
+  let encoder = Z.N.encoder (`Buffer res) kind in
+  List.iter (fun v -> match Z.N.encode encoder v with
+      | `Ok -> ()
+      | `Partial -> Alcotest.fail "Impossible `Partial case")
+    lst ;
+  Buffer.contents res
+
 let invalid_complement_of_length () =
   Alcotest.test_case "invalid complement of length" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\x00\x00\x00\x00\x00") ~o ~w in
@@ -253,7 +262,25 @@ let fuzz9 () =
   Alcotest.(check decode) "fuzz9"
     (Z.M.decode decoder) (`Malformed "Invalid distance")
 
+let huffman_length_extra () =
+  Alcotest.test_case "huffman length extra" `Quick @@ fun () ->
+  let literals = Z.N.make_literals () in
+  literals.(0) <- 2 ; literals.(284) <- 1 ; literals.(285) <- 1 ;
+  let distances = Z.N.make_distances () in
+  distances.(0) <- 2 ;
+  let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
+  let res = encode ~kind:(Z.N.Dynamic dynamic) [ `Literal '\000'
+                                               ; `Literal '\000'
+                                               ; `Copy (0, 258)
+                                               ; `Copy (0, 256)
+                                               ; `End ] in
+  Alcotest.(check string) "encoding" res "\237\193\001\001\000\000\000@ \255W\027B\193\234\004" ;
 
+  let decoder = Z.M.decoder (`String res) ~o ~w in
+  Alcotest.(check decode) "decoding"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  Alcotest.(check string) "result"
+    (String.make (258 + 256 + 2) '\000') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
 let () =
   Alcotest.run "z"
@@ -271,7 +298,8 @@ let () =
                 ; stored ()
                 ; length_extra ()
                 ; long_distance_and_extra ()
-                ; window_end () ]
+                ; window_end ()
+                ; huffman_length_extra () ]
     ; "fuzz", [ fuzz0 ()
               ; fuzz1 ()
               ; fuzz2 ()

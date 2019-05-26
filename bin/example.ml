@@ -24,13 +24,14 @@ let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
 let () = Fmt.epr "# literal 00\n%!"
 let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
 let () = Fmt.epr "# literal 00\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 258))
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (0, 258))
 let () = Fmt.epr "#\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 256))
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (0, 256))
 let () = Fmt.epr "#\n%!"
 let[@warning "-8"] `Ok : res = Z.N.encode encoder `End
 let () = Fmt.epr "#\n%!"
 let () = Fmt.pr "deflated: @[<hov>%a@]\n%!" (Hxd_string.pp Hxd.O.default) (Buffer.contents res)
+let () = Fmt.pr "deflated: %S\n%!" (Buffer.contents res)
 
 (* We should have: "\xed\xc0\x01\x01\x00\x00\x00\x40\x20\xff\x57\x1b\x42\x2c\x4f" *)
 
