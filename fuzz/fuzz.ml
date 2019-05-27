@@ -96,17 +96,18 @@ let ( <.> ) f g = fun x -> f (g x)
 
 let gen_cmd = Crowbar.choose
     [ Crowbar.(map [ range 256 ] (literal <.> Char.chr))
-    ; Crowbar.(map [ range 256; range 32768 ] (fun len off -> `Copy (off, len))) ]
+    ; Crowbar.(map [ range 256; range 32768 ] (fun len off -> `Copy (1 + off, 3 + len))) ]
 
 let frequencies_of_cmds cmds =
   let literals = Z.N.make_literals () in
   let distances = Z.N.make_distances () in
   List.iter
     (function
-      | `Literal chr -> literals.(Char.code chr) <- literals.(Char.code chr) + 1
+      | `Literal chr ->
+        Z.N.succ_literal literals chr
       | `Copy (off, len) ->
-        distances.(off) <- distances.(off) + 1
-      ; literals.(256 + 1 + Z._length.(len)) <- literals.(256 + 1 + Z._length.(len)) + 1)
+        Z.N.succ_length literals len ;
+        Z.N.succ_distance distances off)
     cmds ;
   literals, distances
 
@@ -116,7 +117,7 @@ let check_cmds cmds =
   try List.iter
         (function
           | `Literal _ -> incr write
-          | `Copy (off, len) -> if !write - (off + 1) < 0 then raise_notrace Bad ; write := !write + len)
+          | `Copy (off, len) -> if !write - off < 0 then raise_notrace Bad ; write := !write + len)
         cmds ; true
   with Bad -> false
 
@@ -126,7 +127,7 @@ let apply_cmds cmds =
     (function
       | `Literal chr -> Buffer.add_char buf chr
       | `Copy (off, len) ->
-        for _ = 0 to len - 1 do Buffer.add_char buf (Buffer.nth buf (Buffer.length buf - off - 1)) done)
+        for _ = 0 to len - 1 do Buffer.add_char buf (Buffer.nth buf (Buffer.length buf - off)) done)
     cmds ;
   Buffer.contents buf
 

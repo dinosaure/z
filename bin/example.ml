@@ -1,9 +1,11 @@
 let literals = Z.N.make_literals ()
-let () = literals.(0) <- 2
-let () = literals.(284) <- 1
-let () = literals.(285) <- 1
+let () = Z.N.succ_literal literals '\000'
+let () = Z.N.succ_literal literals '\000'
+let () = Z.N.succ_length literals 258
+let () = Z.N.succ_length literals 256
 let distances = Z.N.make_distances ()
-let () = distances.(0) <- 2
+let () = Z.N.succ_distance distances 1
+let () = Z.N.succ_distance distances 1
 
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
@@ -24,9 +26,9 @@ let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
 let () = Fmt.epr "# literal 00\n%!"
 let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
 let () = Fmt.epr "# literal 00\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (0, 258))
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 258))
 let () = Fmt.epr "#\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (0, 256))
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 256))
 let () = Fmt.epr "#\n%!"
 let[@warning "-8"] `Ok : res = Z.N.encode encoder `End
 let () = Fmt.epr "#\n%!"

@@ -296,14 +296,18 @@ let fuzz9 () =
 let huffman_length_extra () =
   Alcotest.test_case "huffman length extra" `Quick @@ fun () ->
   let literals = Z.N.make_literals () in
-  literals.(0) <- 2 ; literals.(284) <- 1 ; literals.(285) <- 1 ;
+  Z.N.succ_literal literals '\000' ;
+  Z.N.succ_literal literals '\000' ;
+  Z.N.succ_length literals 258 ;
+  Z.N.succ_length literals 256 ;
   let distances = Z.N.make_distances () in
-  distances.(0) <- 2 ;
+  Z.N.succ_distance distances 1 ;
+  Z.N.succ_distance distances 1 ;
   let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
   let res = encode ~kind:(Z.N.Dynamic dynamic) [ `Literal '\000'
                                                ; `Literal '\000'
-                                               ; `Copy (0, 258)
-                                               ; `Copy (0, 256)
+                                               ; `Copy (1, 258)
+                                               ; `Copy (1, 256)
                                                ; `End ] in
   Alcotest.(check str) "encoding" res "\237\193\001\001\000\000\000@ \255W\027B\193\234\004" ;
 

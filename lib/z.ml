@@ -1440,9 +1440,9 @@ module B = struct
     t.r <- t.r + 1 ; r
 
   let copy ~off ~len : cmd =
-    assert (len >= 3 && len <= 258) ;
-    assert (off <= 32768) ;
-    ((len - 3) lsl 16) lor off lor 0x2000000 [@@inline]
+    assert (len >= 3 && len <= 255 + 3) ;
+    assert (off >= 1 && off <= 32767 + 1) ;
+    ((len - 3) lsl 16) lor (off - 1) lor 0x2000000 [@@inline]
 
   let literal chr = Char.code chr
 
@@ -1474,7 +1474,17 @@ module N = struct
     let res = Array.make (2 * _l_codes + 1) 0 in
     res.(256) <- 1 ; res
 
+  let succ_literal literals chr =
+    literals.(Char.code chr) <- literals.(Char.code chr) + 1
+  let succ_length literals length =
+    assert (length >= 3 && length <= 255 + 3) ;
+    literals.(256 + 1 + _length.(length - 3)) <- literals.(256 + 1 + _length.(length - 3)) + 1
+
   let make_distances () = Array.make (2 * _d_codes + 1) 0
+
+  let succ_distance distances distance =
+    assert (distance >= 1 && distance <= 32767 + 1) ;
+    distances.(_distance (pred distance)) <- distances.(_distance (pred distance)) + 1
 
   let bl_tree ltree dtree ~bl_count =
     let bl_freqs = Array.make (2 * _bl_codes + 1) 0 in
