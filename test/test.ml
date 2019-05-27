@@ -1,6 +1,37 @@
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
 
+let pp_chr =
+  Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
+
+let pp_scalar : type buffer.
+    get:(buffer -> int -> char) -> length:(buffer -> int) -> buffer Fmt.t =
+ fun ~get ~length ppf b ->
+  let l = length b in
+  for i = 0 to l / 16 do
+    Fmt.pf ppf "%08x: " (i * 16) ;
+    let j = ref 0 in
+    while !j < 16 do
+      if (i * 16) + !j < l then
+        Fmt.pf ppf "%02x" (Char.code @@ get b ((i * 16) + !j))
+      else Fmt.pf ppf "  " ;
+      if !j mod 2 <> 0 then Fmt.pf ppf " " ;
+      incr j
+    done ;
+    Fmt.pf ppf "  " ;
+    j := 0 ;
+    while !j < 16 do
+      if (i * 16) + !j < l then Fmt.pf ppf "%a" pp_chr (get b ((i * 16) + !j))
+      else Fmt.pf ppf " " ;
+      incr j
+    done ;
+    Fmt.pf ppf "@\n"
+  done
+
+let pp_string = pp_scalar ~get:String.get ~length:String.length
+
+let str = Alcotest.testable pp_string String.equal
+
 let decode =
   let pp ppf = function
     | `Await -> Fmt.string ppf "`Await"
@@ -274,12 +305,12 @@ let huffman_length_extra () =
                                                ; `Copy (0, 258)
                                                ; `Copy (0, 256)
                                                ; `End ] in
-  Alcotest.(check string) "encoding" res "\237\193\001\001\000\000\000@ \255W\027B\193\234\004" ;
+  Alcotest.(check str) "encoding" res "\237\193\001\001\000\000\000@ \255W\027B\193\234\004" ;
 
   let decoder = Z.M.decoder (`String res) ~o ~w in
   Alcotest.(check decode) "decoding"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
-  Alcotest.(check string) "result"
+  Alcotest.(check str) "result"
     (String.make (258 + 256 + 2) '\000') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
 let () =

@@ -1570,13 +1570,23 @@ module N = struct
 
   let pp_chr = Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
 
+  let rec c_bytes bytes k e =
+    let rem = o_rem e in
+    if rem < 2
+    then flush (fun e -> c_bytes bytes k e) e
+    else
+      ( Fmt.epr ">>> [%02x:%02x].\n%!" (bytes land 0xff) ((bytes lsr 8) land 0xff)
+      ; unsafe_set_uint16 e.o e.o_pos bytes
+      ; e.o_pos <- e.o_pos + 2
+      ; k e )
+
   let rec write k e =
     let o_pos = ref e.o_pos in
     let hold = ref e.hold in
     let bits = ref e.bits in
 
     let emit e =
-      if e.bits >= 16
+      if !bits >= 16
       then ( Fmt.epr ">>> [%02x:%02x].\n%!" (!hold land 0xff) ((!hold lsr 8) land 0xff)
            ; unsafe_set_uint16 e.o !o_pos !hold
            ; hold := !hold lsr 16
@@ -1645,31 +1655,32 @@ module N = struct
         B.push_exn e.b (B.copy ~off ~len) ; `Ok
       | `End ->
         Fmt.epr "> EOB.\n%!" ;
-        B.push_exn e.b 256 ; let k _ = `Ok in write (flush k) e
+        let emit k e =
+          assert (e.bits <= 16) ;
 
-  let rec c_bytes bytes k e =
-    let rem = o_rem e in
-    if rem < 2
-    then flush (fun e -> c_bytes bytes k e) e
-    else
-      ( Fmt.epr ">>> [%02x:%02x].\n%!" (bytes land 0xff) ((bytes lsr 8) land 0xff)
-      ; unsafe_set_uint16 e.o e.o_pos bytes
-      ; e.o_pos <- e.o_pos + 2
-      ; k e )
+          if e.bits > 0
+          then ( let k e =
+                   e.hold <- 0 ;
+                   e.bits <- 0 ;
+                   k e in
+                 c_bytes (e.hold land 0xffff) k e )
+          else k e in
+        B.push_exn e.b 256 ; let k _ = `Ok in write (emit (flush k)) e
 
-  let rec c_bits bits long k e =
+  let c_bits bits long k e =
     Fmt.epr "len: %2d, value: %4x.\n%!" long bits ;
     if e.bits + long < 16
     then ( e.hold <- (bits lsl e.bits) lor e.hold
          ; e.bits <- e.bits + long
          ; k e )
     else
-      let k e =
-        e.hold <- e.hold lsr 16 ;
-        e.bits <- e.bits - 16 ;
-        Fmt.epr "↺ " ;
-        c_bits bits long k e in
-      c_bytes (e.hold land 0xffff) k e
+      ( let k e =
+          e.hold <- e.hold lsr 16 ;
+          e.bits <- e.bits - 16 ;
+          k e in
+        e.hold <- (bits lsl e.bits) lor e.hold
+      ; e.bits <- e.bits + long
+      ; c_bytes (e.hold land 0xffff) k e )
 
   (* encode dynamic huffman tree *)
 
