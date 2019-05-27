@@ -317,6 +317,23 @@ let huffman_length_extra () =
   Alcotest.(check str) "result"
     (String.make (258 + 256 + 2) '\000') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
+let fuzz10 () =
+  Alcotest.test_case "fuzz10" `Quick @@ fun () ->
+  let literals = Z.N.make_literals () in
+  Z.N.succ_literal literals (Char.chr 231) ;
+  Z.N.succ_literal literals (Char.chr 60) ;
+  Z.N.succ_literal literals (Char.chr 128) ;
+  Z.N.succ_length literals 19 ;
+  let distances = Z.N.make_distances () in
+  Z.N.succ_distance distances 1 ;
+  let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
+  let res = encode ~kind:(Z.N.Dynamic dynamic)
+      [ `Literal (Char.chr 231); `Literal (Char.chr 60); `Literal (Char.chr 128)
+      ; `Copy (1, 19); `End ] in
+  let decoder = Z.M.decoder (`String res) ~o ~w in
+  Alcotest.(check decode) "decoding"
+    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -344,4 +361,5 @@ let () =
               ; fuzz6 ()
               ; fuzz7 ()
               ; fuzz8 ()
-              ; fuzz9 () ] ]
+              ; fuzz9 ()
+              ; fuzz10 () ] ]

@@ -655,7 +655,12 @@ module M = struct
     else ( d.k <- c_put_byte byte k (* allocation *)
          ; Flush )
 
+  let is_end_of_block lit d =
+    lit.Lookup.t.(d.hold land lit.Lookup.m) land Lookup.mask == 256
+
   let slow_inflate lit dist jump d =
+    Fmt.epr "> inflate (%a).\n%!" pp_jump jump ;
+
     match jump with
     | Length ->
       let k d =
@@ -669,16 +674,25 @@ module M = struct
           let k d =
             d.s <- Inflate ; (* allocation *)
             K in
+          Fmt.epr "inflate literal %02x.\n%!" value ;
           c_put_byte value k d
         else if value == 256
-        then ( if d.last
+        then ( Fmt.epr "inflate end-of-block.\n%!"
+             ; if d.last
                then ( d.s <- End_of_inflate ; End )
                else ( d.s <- Header ; K ) )
         else ( d.l <- value - 257
              ; d.jump <- Extra_length
              ; d.s <- Inflate (* allocation *)
              ; K ) in
-      c_peek_bits lit.Lookup.l k d
+      (* XXX(dinosaure): this is necessary where [EOB] is not necessary the longest code.
+         So we can occur the case where we are at the end of the input and have the [EOB] code,
+         but not enough to have [lit.Lookup.l] bits:
+         - previously, we just ask more input
+         - now, we check if [d.hold] is [EOB]: assumption, codes are prefix free. *)
+      if is_end_of_block lit d
+      then k d
+      else c_peek_bits lit.Lookup.l k d
     | Extra_length ->
       let len = _extra_lbits.(d.l) in
       let k d =
@@ -686,6 +700,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.l <- _base_length.(d.l) + 3 + extra ;
+        Fmt.epr "inflate length %3d.\n%!" d.l ;
         d.jump <- Distance ;
         d.s <- Inflate ; (* allocation *)
         K in
@@ -709,6 +724,7 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- _base_dist.(d.d) + 1 + extra ;
+        Fmt.epr "inflate distance %d.\n%!" d.d ;
         d.jump <- Write ;
         d.s <- Inflate ; (* allocation *)
         K in
@@ -728,11 +744,11 @@ module M = struct
         d.o_pos <- d.o_pos + len ;
         if d.l - len == 0
         then ( d.jump <- Length
-            ; d.s <- Inflate (* allocation *)
-            ; K )
+             ; d.s <- Inflate (* allocation *)
+             ; K )
         else ( d.l <- d.l - len
-            ; d.s <- Inflate (* allocation *)
-            ; Flush )
+             ; d.s <- Inflate (* allocation *)
+             ; Flush )
 
   exception End
   exception Invalid_distance
@@ -771,6 +787,7 @@ module M = struct
           then ( unsafe_set_uint8 d.o !o_pos value
                ; Window.add d.w value
                ; incr o_pos
+               ; Fmt.epr "inffast literal %02x.\n%!" value
                (* ; jump := Length *) )
           else if value == 256 then raise_notrace End
           else ( jump := Extra_length
@@ -1658,7 +1675,7 @@ module N = struct
     | false -> match v with
       | `Await -> assert false
       | `Literal chr ->
-        Fmt.epr "> literal:%d (%a).\n%!" (Char.code chr) pp_chr chr ;
+        Fmt.epr "> literal:%3d (%a).\n%!" (Char.code chr) pp_chr chr ;
         B.push_exn e.b (B.literal chr) ; `Ok
       | `Copy (off, len) ->
         Fmt.epr "> copy, off:%d, len:%d.\n%!" off len ;
