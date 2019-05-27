@@ -1184,6 +1184,7 @@ module T = struct
     (* check that the bit counts in [bl_count] are consistent. The last code
        must be all ones. *)
     assert (!code + bl_count.(_max_bits) - 1 = (1 lsl _max_bits) - 1);
+    Fmt.epr "generate_codes: max_code = %d.\n%!" max_code ;
 
     for n = 0 to max_code
     do
@@ -1192,7 +1193,10 @@ module T = struct
       then
         (* Now reverse the bits. *)
         ( tree_codes.(n) <- reverse_code next_code.(len) len
-        ; next_code.(len) <- next_code.(len) + 1 )
+        ; next_code.(len) <- next_code.(len) + 1
+        ; Fmt.epr "n %3d %c l %2d c %4x (%x).\n%!"
+            n (if n < 256 && is_graph (Char.chr n) then Char.chr n else '.')
+            len tree_codes.(n) (next_code.(len) - 1))
     done ;
 
     tree_codes
@@ -1573,7 +1577,8 @@ module N = struct
 
     let emit e =
       if e.bits >= 16
-      then ( unsafe_set_uint16 e.o !o_pos !hold
+      then ( Fmt.epr ">>> [%02x:%02x].\n%!" (!hold land 0xff) ((!hold lsr 8) land 0xff)
+           ; unsafe_set_uint16 e.o !o_pos !hold
            ; hold := !hold lsr 16
            ; bits := !bits - 16
            ; o_pos := !o_pos + 2 ) in
@@ -1647,13 +1652,14 @@ module N = struct
     if rem < 2
     then flush (fun e -> c_bytes bytes k e) e
     else
-      ( unsafe_set_uint16 e.o e.o_pos bytes
+      ( Fmt.epr ">>> [%02x:%02x].\n%!" (bytes land 0xff) ((bytes lsr 8) land 0xff)
+      ; unsafe_set_uint16 e.o e.o_pos bytes
       ; e.o_pos <- e.o_pos + 2
       ; k e )
 
   let rec c_bits bits long k e =
     Fmt.epr "len: %2d, value: %4x.\n%!" long bits ;
-    if e.bits + long < Sys.word_size - 1
+    if e.bits + long < 16
     then ( e.hold <- (bits lsl e.bits) lor e.hold
          ; e.bits <- e.bits + long
          ; k e )

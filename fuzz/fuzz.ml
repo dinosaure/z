@@ -73,7 +73,7 @@ let uniq =
   let v = ref (-1) in
   fun () -> incr v ; !v
 
-let () =
+let z_zlib_0 () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.bytes ] @@ fun bytes ->
   Fmt.epr "Test %S.\n%!" bytes ;
   let res0 = zlib bytes in
@@ -89,4 +89,91 @@ let () =
          ; Fmt.pf ppf "res0: @[<hov%a@]\n%!" (Hxd_string.pp Hxd.O.default) res0
          ; Fmt.pf ppf "res1: @[<hov%a@]\n%!" (Hxd_string.pp Hxd.O.default) res1 ) ;
 
+  Crowbar.check_eq ~pp:pp_string ~eq:String.equal res0 res1
+
+let literal chr = `Literal chr
+let ( <.> ) f g = fun x -> f (g x)
+
+let gen_cmd = Crowbar.choose
+    [ Crowbar.(map [ range 256 ] (literal <.> Char.chr))
+    ; Crowbar.(map [ range 256; range 32768 ] (fun len off -> `Copy (off, len))) ]
+
+let frequencies_of_cmds cmds =
+  let literals = Z.N.make_literals () in
+  let distances = Z.N.make_distances () in
+  List.iter
+    (function
+      | `Literal chr -> literals.(Char.code chr) <- literals.(Char.code chr) + 1
+      | `Copy (off, len) ->
+        distances.(off) <- distances.(off) + 1
+      ; literals.(256 + 1 + Z._length.(len)) <- literals.(256 + 1 + Z._length.(len)) + 1)
+    cmds ;
+  literals, distances
+
+let check_cmds cmds =
+  let exception Bad in
+  let write = ref 0 in
+  try List.iter
+        (function
+          | `Literal _ -> incr write
+          | `Copy (off, len) -> if !write - (off + 1) < 0 then raise_notrace Bad ; write := !write + len)
+        cmds ; true
+  with Bad -> false
+
+let apply_cmds cmds =
+  let buf = Buffer.create 16 in
+  List.iter
+    (function
+      | `Literal chr -> Buffer.add_char buf chr
+      | `Copy (off, len) ->
+        for _ = 0 to len - 1 do Buffer.add_char buf (Buffer.nth buf (Buffer.length buf - off - 1)) done)
+    cmds ;
+  Buffer.contents buf
+
+let zlib bytes =
+  let off = ref 0 in
+  let buf = Buffer.create 16 in
+  try
+    Zlib.uncompress ~header:false
+      (fun ibuf ->
+         if String.length bytes - !off = 0 then raise End_of_input ;
+         let len = min (Bytes.length ibuf) (String.length bytes - !off) in
+         Bytes.blit_string bytes !off ibuf 0 len ;
+         off := !off + len ; len)
+      (fun obuf len ->
+         Buffer.add_subbytes buf obuf 0 len) ;
+    Buffer.contents buf
+  with Zlib.Error _ -> Crowbar.bad_test ()
+     | End_of_input -> Crowbar.bad_test ()
+
+let pp_chr =
+  Fmt.using (function '\032' .. '\126' as x -> String.make 1 x | chr -> Fmt.strf "\\%03d" (Char.code chr)) Fmt.string
+
+let pp_cmd ppf = function
+  | `Literal chr -> Fmt.pf ppf "(`Literal %a)" pp_chr chr
+  | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d, len:%d)" off len
+
+let () =
+  Crowbar.add_test ~name:"z/zlib" [ Crowbar.list gen_cmd ] @@ fun cmds ->
+  if not (check_cmds cmds) then Crowbar.bad_test () ;
+  let expected = apply_cmds cmds in
+  let buf = Buffer.create 16 in
+  let literals, distances = frequencies_of_cmds cmds in
+  let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
+  let encoder = Z.N.encoder ~last:true (`Buffer buf) (Z.N.Dynamic dynamic) in
+  List.iter (fun v -> match Z.N.encode encoder v with
+      | `Ok -> ()
+      | `Partial -> Crowbar.fail "Impossible `Partial case")
+    ((cmds :> Z.N.encode list) @ [ `End ]) ;
+  let bytes = Buffer.contents buf in
+  let res0 = zlib bytes in
+  let res1 = z bytes in
+
+  Fmt.epr "deflated: %S.\n%!" bytes ;
+  Fmt.epr "deflated: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) cmds ;
+  Fmt.epr "inflated (zlib): %S.\n%!" res0 ;
+  Fmt.epr "inflated (z): %S.\n%!" res1 ;
+  Fmt.epr "inflated (fuzz): %S.\n%!" expected ;
+
+  Crowbar.check_eq ~pp:pp_string ~eq:String.equal expected res0 ;
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal res0 res1
