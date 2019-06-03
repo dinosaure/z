@@ -658,7 +658,7 @@ module M = struct
   let[@inline always] is_end_of_block lit d =
     let rem = i_rem d in
     lit.Lookup.t.(d.hold land lit.Lookup.m) land Lookup.mask == 256
-    && rem == 0
+    && rem < 1
 
   let slow_inflate lit dist jump d =
     Fmt.epr "> inflate (%a).\n%!" pp_jump jump ;
