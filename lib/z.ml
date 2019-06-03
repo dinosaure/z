@@ -1424,7 +1424,7 @@ module T = struct
         then
           ( if !curlen != !prevlen then ( bl_symbols.(!i) <- code !curlen bltree.tree ; incr i ; decr count )
           ; bl_symbols.(!i) <- code _rep_3_6 bltree.tree ; incr i
-          ; bl_symbols.(!i) <- bits (!count - 3) 3 ; incr i )
+          ; bl_symbols.(!i) <- bits (!count - 3) 2 ; incr i )
         else if !count <= 10
         then
           ( bl_symbols.(!i) <- code _repz_3_10 bltree.tree ; incr i
