@@ -663,6 +663,23 @@ module M = struct
   let slow_inflate lit dist jump d =
     Fmt.epr "> inflate (%a).\n%!" pp_jump jump ;
 
+    let rec c_peek_bits n k d =
+      if d.bits >= n then k d
+      else
+        let rem = i_rem d in
+
+        if rem <= 0
+        then
+          if rem < 0 (* end of input *)
+          then err_unexpected_end_of_input d
+          else refill (c_peek_bits n k) d (* allocation *)
+        else
+          ( let byte = unsafe_get_uint8 d.i d.i_pos in
+            d.i_pos <- d.i_pos + 1
+          ; d.hold <- d.hold lor (byte lsl d.bits)
+          ; d.bits <- d.bits + 8
+          ; if d.bits >= n || is_end_of_block lit d then k d else c_peek_bits n k d ) in
+
     match jump with
     | Length ->
       let k d =
