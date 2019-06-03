@@ -85,9 +85,9 @@ let () =
   then ( let id = uniq () in
          let oc = open_out (Fmt.strf "fuzz-%d" id) in
          let ppf = Format.formatter_of_out_channel oc in
-           Fmt.pf ppf "byte: @[<hov%a@]\n%!" (Hxd_string.pp Hxd.O.default) bytes
-         ; Fmt.pf ppf "res0: @[<hov%a@]\n%!" (Hxd_string.pp Hxd.O.default) res0
-         ; Fmt.pf ppf "res1: @[<hov%a@]\n%!" (Hxd_string.pp Hxd.O.default) res1 ) ;
+           Fmt.pf ppf "byte: @[<hov%a@]\n%!" pp_string bytes
+         ; Fmt.pf ppf "res0: @[<hov%a@]\n%!" pp_string res0
+         ; Fmt.pf ppf "res1: @[<hov%a@]\n%!" pp_string res1 ) ;
 
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal res0 res1
 
