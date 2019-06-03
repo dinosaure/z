@@ -655,8 +655,10 @@ module M = struct
     else ( d.k <- c_put_byte byte k (* allocation *)
          ; Flush )
 
-  let is_end_of_block lit d =
+  let[@inline always] is_end_of_block lit d =
+    let rem = i_rem d in
     lit.Lookup.t.(d.hold land lit.Lookup.m) land Lookup.mask == 256
+    && rem == 0
 
   let slow_inflate lit dist jump d =
     Fmt.epr "> inflate (%a).\n%!" pp_jump jump ;
@@ -685,11 +687,16 @@ module M = struct
              ; d.jump <- Extra_length
              ; d.s <- Inflate (* allocation *)
              ; K ) in
-      (* XXX(dinosaure): this is necessary where [EOB] is not necessary the longest code.
-         So we can occur the case where we are at the end of the input and have the [EOB] code,
-         but not enough to have [lit.Lookup.l] bits:
+      (* XXX(dinosaure): this is necessary where [EOB] is not necessary the
+         longest code. So we can occur the case where we are at the end of the
+         input and have the [EOB] code, but not enough to have [lit.Lookup.l]
+         bits:
+
          - previously, we just ask more input
-         - now, we check if [d.hold] is [EOB]: assumption, codes are prefix free. *)
+         - now, we check if [d.hold] is [EOB]: assumption, codes are prefix free
+           AND we reach end of input.
+
+         TODO: optimize this branch! *)
       if is_end_of_block lit d
       then k d
       else c_peek_bits lit.Lookup.l k d
@@ -1597,13 +1604,23 @@ module N = struct
 
   let pp_chr = Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
 
-  let rec c_bytes bytes k e =
+  let rec c_byte byte k e =
+    let rem = o_rem e in
+    if rem < 1
+    then flush (fun e -> c_byte byte k e) e
+    else
+      ( Fmt.epr ">>> [%02x].\n%!" (byte land 0xff)
+      ; unsafe_set_uint8 e.o e.o_pos byte
+      ; e.o_pos <- e.o_pos + 1
+      ; k e )
+
+  let rec c_short short k e =
     let rem = o_rem e in
     if rem < 2
-    then flush (fun e -> c_bytes bytes k e) e
+    then flush (fun e -> c_short short k e) e
     else
-      ( Fmt.epr ">>> [%02x:%02x].\n%!" (bytes land 0xff) ((bytes lsr 8) land 0xff)
-      ; unsafe_set_uint16 e.o e.o_pos bytes
+      ( Fmt.epr ">>> [emit] [%02x:%02x].\n%!" (short land 0xff) ((short lsr 8) land 0xff)
+      ; unsafe_set_uint16 e.o e.o_pos short
       ; e.o_pos <- e.o_pos + 2
       ; k e )
 
@@ -1685,12 +1702,18 @@ module N = struct
         let emit k e =
           assert (e.bits <= 16) ;
 
-          if e.bits > 0
+          if e.bits > 8
           then ( let k e =
                    e.hold <- 0 ;
                    e.bits <- 0 ;
                    k e in
-                 c_bytes (e.hold land 0xffff) k e )
+                 c_short (e.hold land 0xffff) k e )
+          else if e.bits > 0
+          then ( let k e =
+                   e.hold <- 0 ;
+                   e.bits <- 0 ;
+                   k e in
+                 c_byte (e.hold land 0xff) k e )
           else k e in
         B.push_exn e.b 256 ; let k _ = `Ok in write (emit (flush k)) e
 
@@ -1707,14 +1730,23 @@ module N = struct
           k e in
         e.hold <- (bits lsl e.bits) lor e.hold
       ; e.bits <- e.bits + long
-      ; c_bytes (e.hold land 0xffff) k e )
+      ; c_short (e.hold land 0xffff) k e )
 
   (* encode dynamic huffman tree *)
 
   let encode_huffman dynamic k e =
+    let rec flush e =
+      if e.bits >= 8
+      then
+        ( let k e =
+            e.hold <- e.hold lsr 8 ;
+            e.bits <- e.bits - 8 ;
+            flush e in
+          c_byte (e.hold land 0xff) k e )
+      else k e in
     let rec go rank e =
       if rank == Array.length dynamic.symbols
-      then k e
+      then flush e
       else
         let len, code =
           dynamic.symbols.(rank) lsr _max_bits,
