@@ -55,6 +55,20 @@ let encode ~kind lst =
     lst ;
   Buffer.contents res
 
+let encode_dynamic lst =
+  let literals = Z.N.make_literals () in
+  let distances = Z.N.make_distances () in
+  List.iter
+    (function
+     | `Literal chr -> Z.N.succ_literal literals chr
+     | `Copy (off, len) ->
+        Z.N.succ_length literals len ;
+        Z.N.succ_distance distances off
+     | _ -> ())
+    lst ;
+  let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
+  encode ~kind:(Z.N.Dynamic dynamic) lst
+
 let invalid_complement_of_length () =
   Alcotest.test_case "invalid complement of length" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\x00\x00\x00\x00\x00") ~o ~w in
@@ -141,32 +155,45 @@ let stored () =
   Alcotest.(check string) "0x00"
     "\x00" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
 
+let unroll_inflate decoder =
+  let buf = Buffer.create 16 in
+  let rec go () = match Z.M.decode decoder with
+    | `Flush ->
+       for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
+       do Buffer.add_char buf (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done ;
+       Z.M.flush decoder ; go ()
+    | `Await -> Alcotest.fail "Impossible `Await case"
+    | `Malformed err -> Alcotest.fail err
+    | `End ->
+      for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
+      do Buffer.add_char buf (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done ;
+      Buffer.contents buf in
+  go ()
+
 let length_extra () =
   Alcotest.test_case "length extra" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\xed\xc0\x01\x01\x00\x00\x00\x40\x20\xff\x57\x1b\x42\x2c\x4f") ~o ~w in
-  Alcotest.(check decode) "length extra"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
+  Fmt.epr "Buffer length: %d.\n%!" (String.length res) ;
   Alcotest.(check string) "0x00 * 516"
-    (String.make 516 '\x00') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.make 516 '\x00') res
 
 let long_distance_and_extra () =
   Alcotest.test_case "long distance and extra" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\xed\xcf\xc1\xb1\x2c\x47\x10\xc4\x30\xfa\x6f\x35\x1d\x01\x82\x59\x3d\xfb\
                                       \xbe\x2e\x2a\xfc\x0f\x0c") ~o ~w in
-  Alcotest.(check decode) "long distance and extra"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
   Alcotest.(check string) "0x00 * 518"
-    (String.make 518 '\x00') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.make 518 '\x00') res
 
 let window_end () =
   Alcotest.test_case "window end" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\xed\xc0\x81\x00\x00\x00\x00\x80\xa0\xfd\xa9\x17\xa9\x00\x00\x00\x00\x00\
                                       \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
                                       \x00\x00\x00\x00\x00\x00\x00\x00\x00\x06") ~o ~w in
-  Alcotest.(check decode) "window end"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
   Alcotest.(check string) "0x00 * 33025"
-    (String.make 33025 '\x00') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.make 33025 '\x00') res
 
 let fuzz0 () =
   Alcotest.test_case "fuzz0" `Quick @@ fun () ->
@@ -194,11 +221,9 @@ let fuzz2 () =
     ; "\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x7e\x3a\x2c\x50"                     (* ~~~~~~~~:,P *)      ] in
   Alcotest.test_case "fuzz2" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\x93\x3a\x55\x47\x12\x80\x51\x56\x3a\x01\x00\x00") ~o ~w in
-  Alcotest.(check decode) "fuzz2"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
   Alcotest.(check string) "fuzz2"
-    (String.concat "" expected_output)
-    (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.concat "" expected_output) res
 
 let fuzz3 () =
   let expected_output =
@@ -224,11 +249,9 @@ let fuzz3 () =
     ; "\xc8\x76\xc8\x76"                                                 (* .v.v *)             ] in
   Alcotest.test_case "fuzz3" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\x93\x3a\x55\x47\x12\x3a\x51\x36\x0a\x01\x00\x00") ~o ~w in
-  Alcotest.(check decode) "fuzz3"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
   Alcotest.(check string) "fuzz3"
-    (String.concat "" expected_output)
-    (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.concat "" expected_output) res
 
 let fuzz4 () =
   let expected_output =
@@ -238,10 +261,9 @@ let fuzz4 () =
     ; "\xc8\x76\x75\x75\x75\x75\x75\x75"                                 (* .vuuuuuu *)         ] in
   Alcotest.test_case "fuzz4" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\x93\x3a\x55\x47\x12\x3a\x51\x56\x0a\x06\x80\x00") ~o ~w in
-  Alcotest.(check decode) "fuzz4"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
   Alcotest.(check string) "fuzz4"
-    (String.concat "" expected_output) (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.concat "" expected_output) res
 
 let fuzz5 () =
   let input =
@@ -252,10 +274,9 @@ let fuzz5 () =
     ; "\x50\x50\x50\x50\x50\x50\x50\x50\x50"                             (* PPPPPPPPP *)        ] in
   Alcotest.test_case "fuzz5" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String (String.concat "" input)) ~o ~w in
-  Alcotest.(check decode) "fuzz5"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
   Alcotest.(check string) "fuzz5"
-    (String.concat "" expected_output) (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.concat "" expected_output) res
 
 let fuzz6 () =
   let expected_output =
@@ -312,27 +333,34 @@ let huffman_length_extra () =
   Alcotest.(check str) "encoding" res "\237\193\001\001\000\000\000@ \255W\027B\193\234\004" ;
 
   let decoder = Z.M.decoder (`String res) ~o ~w in
-  Alcotest.(check decode) "decoding"
-    (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End ;
+  let res = unroll_inflate decoder in
   Alcotest.(check str) "result"
-    (String.make (258 + 256 + 2) '\000') (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - Z.M.dst_rem decoder))
+    (String.make (258 + 256 + 2) '\000') res
 
 let fuzz10 () =
   Alcotest.test_case "fuzz10" `Quick @@ fun () ->
-  let literals = Z.N.make_literals () in
-  Z.N.succ_literal literals (Char.chr 231) ;
-  Z.N.succ_literal literals (Char.chr 60) ;
-  Z.N.succ_literal literals (Char.chr 128) ;
-  Z.N.succ_length literals 19 ;
-  let distances = Z.N.make_distances () in
-  Z.N.succ_distance distances 1 ;
-  let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
-  let res = encode ~kind:(Z.N.Dynamic dynamic)
-      [ `Literal (Char.chr 231); `Literal (Char.chr 60); `Literal (Char.chr 128)
-      ; `Copy (1, 19); `End ] in
+  let lst =
+    [ `Literal (Char.chr 231); `Literal (Char.chr 60); `Literal (Char.chr 128)
+    ; `Copy (1, 19); `End ] in
+  let res = encode_dynamic lst in
   let decoder = Z.M.decoder (`String res) ~o ~w in
   Alcotest.(check decode) "decoding"
     (ignore @@ Z.M.decode decoder ; Z.M.decode decoder) `End
+
+let fuzz11 () =
+  Alcotest.test_case "fuzz11" `Quick @@ fun () ->
+  let lst =
+    [ `Literal (Char.chr 228)
+    ; `Literal (Char.chr 255)
+    ; `Copy (1, 130)
+    ; `End ] in
+  let res = encode_dynamic lst in
+  let decoder = Z.M.decoder (`String res) ~o ~w in
+  let res0 = unroll_inflate decoder in
+  let res1 = Bytes.create 132 in
+  Bytes.set res1 0 (Char.chr 228) ;
+  Bytes.fill res1 1 131 (Char.chr 255) ;
+  Alcotest.(check str) "result" res0 (Bytes.unsafe_to_string res1)
 
 let () =
   Alcotest.run "z"
@@ -362,4 +390,5 @@ let () =
               ; fuzz7 ()
               ; fuzz8 ()
               ; fuzz9 ()
-              ; fuzz10 () ] ]
+              ; fuzz10 ()
+              ; fuzz11 () ] ]
