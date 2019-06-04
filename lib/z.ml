@@ -352,7 +352,8 @@ module M = struct
   type kind =
     | CODES | LENS | DISTS
 
-  exception Break
+  let empty_table =
+    [| 1 lsl _max_bits (* len: 1, val: 0 *) |], 1
 
   let huffman kind table off codes =
     let bl_count = Array.make 16 0 in
@@ -365,31 +366,37 @@ module M = struct
 
     (* XXX(dinosaure): check if we have an incomplete set for [LENS] and [DIST].
        This code is ugly, TODO! *)
+    let exception Break in
+
     ( try while !max >= 1 do
           if bl_count.(!max) != 0 then raise_notrace Break
         ; decr max done with Break -> () ) ;
 
-    let code = ref 0 in
-    let left = ref 1 in
-    let next_code = Array.make 16 0 in
-    for i = 1 to 15 do
-      left := !left lsl 1 ;
-      left := !left - bl_count.(i) ;
-      if !left < 0 then raise Invalid_huffman ;
-      code := (!code + bl_count.(i)) lsl 1 ;
-      next_code.(i) <- !code
-    done ;
-    if !left > 0 && (kind = CODES || !max != 1) then raise Invalid_huffman ;
-    let ordered = ref Heap.None in
-    let max = ref 0 in
-    for i = 0 to codes - 1 do
-      let l = table.(off + i) in
-      if l <> 0 then (
-        let n = next_code.(l - 1) in
-        next_code.(l - 1) <- n + 1 ;
-        ordered := Heap.push !ordered n (l, i) ; (* allocation *)
-        max := if l > !max then l else !max )
-    done ; (prefix !ordered !max, !max) (* allocation *)
+    if !max == 0 then empty_table
+    else
+      ( let code = ref 0 in
+        let left = ref 1 in
+        let next_code = Array.make 16 0 in
+        for i = 1 to 15 do
+          left := !left lsl 1 ;
+          left := !left - bl_count.(i) ;
+          if !left < 0 then raise Invalid_huffman ;
+          code := (!code + bl_count.(i)) lsl 1 ;
+          next_code.(i) <- !code
+        done ;
+        Fmt.epr "left: %d (> 0) && (kind: %a = CODES || max: %d != 1).\n%!"
+          !left pp_kind kind !max ;
+        if !left > 0 && (kind = CODES || !max != 1) then raise Invalid_huffman ;
+        let ordered = ref Heap.None in
+        let max = ref 0 in
+        for i = 0 to codes - 1 do
+          let l = table.(off + i) in
+          if l <> 0 then (
+            let n = next_code.(l - 1) in
+            next_code.(l - 1) <- n + 1 ;
+            ordered := Heap.push !ordered n (l, i) ; (* allocation *)
+            max := if l > !max then l else !max )
+        done ; (prefix !ordered !max, !max) (* allocation *) )
 
   type decoder =
     { src : src
@@ -774,10 +781,10 @@ module M = struct
              ; d.s <- Inflate (* allocation *)
              ; Flush )
 
-  exception End
-  exception Invalid_distance
-
   let inflate lit dist jump d =
+    let exception End in
+    let exception Invalid_distance in
+
     let hold = ref (Nativeint.of_int d.hold) in
     let bits = ref d.bits in
     let jump = ref jump in
@@ -863,7 +870,7 @@ module M = struct
 
           jump := Write
         | Write ->
-          if d.d > Window.have d.w then raise Invalid_distance ;
+          if d.d > Window.have d.w then raise_notrace Invalid_distance ;
 
           let len = min d.l (bigstring_length d.o - !o_pos) in
           let off = Window.mask (d.w.Window.w - d.d) in
@@ -1485,7 +1492,7 @@ module B = struct
     assert (off >= 1 && off <= 32767 + 1) ;
     ((len - 3) lsl 16) lor (off - 1) lor 0x2000000 [@@inline]
 
-  let literal chr = Char.code chr
+  let literal chr = Char.code chr [@@inline]
 
   let create length =
     { buf= Bigarray.Array1.create Bigarray.int Bigarray.c_layout length
@@ -1587,15 +1594,10 @@ module N = struct
     ; mutable o_pos : int
     ; mutable o_max : int
     ; b : B.t
-    ; mutable f_pos : int
-    ; t : bigstring
-    ; mutable t_pos : int
-    ; mutable t_max : int
     ; mutable k : encoder -> encode -> [ `Ok | `Partial ] }
 
   (* remaining bytes to write in [e.o]. *)
   let o_rem e = e.o_max - e.o_pos + 1
-  let t_rem e = e.t_max - e.t_pos + 1 [@@inline]
 
   (* set [e.o] with [s]. *)
   let dst e s j l =
@@ -1707,7 +1709,7 @@ module N = struct
     | true ->
       let k e = encode e v in write k e
     | false -> match v with
-      | `Await -> assert false
+      | `Await -> `Partial
       | `Literal chr ->
         Fmt.epr "> literal:%3d (%a).\n%!" (Char.code chr) pp_chr chr ;
         B.push_exn e.b (B.literal chr) ; `Ok
@@ -1811,10 +1813,6 @@ module N = struct
     ; o_pos
     ; o_max
     ; b= B.create 4096
-    ; f_pos= 0
-    ; t= bigstring_create 4
-    ; t_pos= 1
-    ; t_max= 0
     ; k }
 
   let encode e = e.k e
