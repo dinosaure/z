@@ -384,8 +384,6 @@ module M = struct
           code := (!code + bl_count.(i)) lsl 1 ;
           next_code.(i) <- !code
         done ;
-        Fmt.epr "left: %d (> 0) && (kind: %a = CODES || max: %d != 1).\n%!"
-          !left pp_kind kind !max ;
         if !left > 0 && (kind = CODES || !max != 1) then raise Invalid_huffman ;
         let ordered = ref Heap.None in
         let max = ref 0 in
