@@ -454,6 +454,15 @@ let fuzz15 () =
     ] in
   Alcotest.(check str) "result" res (String.concat "" outputs)
 
+let fuzz16 () =
+  Alcotest.test_case "fuzz16" `Quick @@ fun () ->
+  let lst = [ `Literal '@'; `Copy (1, 212); `Copy (129, 258); `Copy (7, 131); `Copy (527, 208); `Copy (129, 258); `End ] in
+  let res = encode_dynamic lst in
+  Fmt.epr "> %S.\n%!" res ;
+  let decoder = Z.M.decoder (`String res) ~o ~w in
+  let res = unroll_inflate decoder in
+  Alcotest.(check str) "result" res (String.make 1068 '@')
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -487,4 +496,5 @@ let () =
               ; fuzz12 ()
               ; fuzz13 ()
               ; fuzz14 ()
-              ; fuzz15 () ] ]
+              ; fuzz15 ()
+              ; fuzz16 () ] ]

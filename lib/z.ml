@@ -1709,7 +1709,8 @@ module N = struct
     | true ->
       let k e = encode e v in write k e
     | false -> match v with
-      | `Await -> `Partial
+      | `Await ->
+        let k e = encode e v in write k e
       | `Literal chr ->
         Fmt.epr "> literal:%3d (%a).\n%!" (Char.code chr) pp_chr chr ;
         B.push_exn e.b (B.literal chr) ; `Ok
@@ -1734,7 +1735,12 @@ module N = struct
                    k e in
                  c_byte (e.hold land 0xff) k e )
           else k e in
-        B.push_exn e.b 256 ; let k _ = `Ok in write (emit (flush k)) e
+        let ok _ = `Ok in
+        let rec k e =
+          if B.is_empty e.b
+          then emit (flush ok) e
+          else write (flush k) e in
+        B.push_exn e.b 256 ; write k e
 
   let c_bits bits long k e =
     Fmt.epr "len: %2d, value: %4x.\n%!" long bits ;
