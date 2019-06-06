@@ -1536,7 +1536,7 @@ module B = struct
     | false -> `Literal (Char.chr (cmd land 0xff))
     | true ->
       let off = (cmd land 0xffff) + 1 in
-      let len = ((cmd lsl 16) land 0x1ff) + 3 in (* XXX(dinosaure): ((1 lsl 9) - 1) - 0xff *)
+      let len = ((cmd lsr 16) land 0x1ff) + 3 in (* XXX(dinosaure): ((1 lsl 9) - 1) - 0xff *)
       `Copy (off, len)
 
   let blit t buf off len =

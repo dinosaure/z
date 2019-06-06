@@ -468,7 +468,7 @@ let fuzz16 () =
   Alcotest.(check str) "result" res (String.make 1068 '@')
 
 let pp_cmd ppf = function
-  | `Literal chr -> Fmt.pf ppf "(`Literal %02x)" (Char.code chr)
+  | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
   | `Copy (off, len) -> Fmt.pf ppf "(`Copy (off:%d, len:%d))" off len
 
 let eq_cmd a b = match a, b with
@@ -504,6 +504,37 @@ let lz77_1 () =
                                        ; `Literal 'e' ]
   | `Flush -> Alcotest.fail "Unexpected `Flush return"
   | `Await -> Alcotest.fail "Impossible `Await case"
+
+let reconstruct lst =
+  let len = List.fold_left (fun a -> function `Literal _ -> 1 + a | `Copy (_, len) -> len + a) 0 lst in
+  let res = Bytes.create len in
+  let pos = ref 0 in
+  List.iter (function
+      | `Literal chr -> Bytes.set res !pos chr ; incr pos
+      | `Copy (off, len) ->
+        for _ = 0 to len - 1
+        do Bytes.set res !pos (Bytes.get res (!pos - off)) ; incr pos done)
+    lst ;
+  Bytes.unsafe_to_string res
+
+let lz77_2 () =
+  Alcotest.test_case "fuzz" `Quick @@ fun () ->
+  Z.B.reset q ;
+  let inputs =
+    [ "\x40\x1e\x04\x30\x73\x00\x37\x0d\x19\x38\x63\x00\x0d\x0d\x0d\x22" (* @..0s.7..8c..... *)
+    ; "\x0d\x0d\x0d\x0d\x0d\x0d\x0d\x19\x38\x80"                         (* ........8. *)
+    ] in
+  let input = String.concat "" inputs in
+  let state = Z.L.state (`String input) ~w ~q in
+  match Z.L.compress state with
+  | `End ->
+    let lst = Z.B.to_list q in
+    Fmt.epr "compressed result: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) lst ;
+    let res = reconstruct lst in
+    Alcotest.(check str) "result" input res
+  | `Flush -> Alcotest.fail "Unexpected `Flush return"
+  | `Await -> Alcotest.fail "Impossible `Await case"
+
 
 let () =
   Alcotest.run "z"
@@ -541,4 +572,5 @@ let () =
               ; fuzz15 ()
               ; fuzz16 () ]
     ; "lz77", [ lz77_0 ()
-              ; lz77_1 () ] ]
+              ; lz77_1 ()
+              ; lz77_2 () ] ]
