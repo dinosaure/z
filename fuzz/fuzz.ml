@@ -1,5 +1,6 @@
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
+let q = Z.B.create 4096
 
 exception End_of_input
 
@@ -73,7 +74,7 @@ let uniq =
   let v = ref (-1) in
   fun () -> incr v ; !v
 
-let () =
+let lol () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.bytes ] @@ fun bytes ->
   Fmt.epr "Test %S.\n%!" bytes ;
   let res0 = zlib bytes in
@@ -157,13 +158,16 @@ let pp_cmd ppf = function
 let () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.list gen_cmd ] @@ fun cmds ->
   if not (check_cmds cmds) then Crowbar.bad_test () ;
+  Z.B.reset q ;
+
   let expected = apply_cmds cmds in
   let buf = Buffer.create 16 in
   let literals, distances = frequencies_of_cmds cmds in
   let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
-  let encoder = Z.N.encoder ~last:true (`Buffer buf) (Z.N.Dynamic dynamic) in
+  let encoder = Z.N.encoder (`Buffer buf) { kind= Z.N.Dynamic dynamic; last= true; } ~q in
   List.iter (fun v -> match Z.N.encode encoder v with
       | `Ok -> ()
+      | `End _ -> Crowbar.fail "Impossible `End case"
       | `Partial -> Crowbar.fail "Impossible `Partial case")
     ((cmds :> Z.N.encode list) @ [ `End ]) ;
   let bytes = Buffer.contents buf in
@@ -178,3 +182,60 @@ let () =
 
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal expected res0 ;
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal res0 res1
+
+let ( <.> ) f g = fun x -> f (g x)
+
+let non_empty_bytes n : string Crowbar.gen =
+  let open Crowbar in
+  let ( >>= ) = dynamic_bind in
+
+  let rec go acc = function
+    | 0 -> concat_gen_list (const "") acc
+    | n -> go (map [ uint8 ] (String.make 1 <.> Char.chr) :: acc) (pred n) in
+  let gen n = go [] n in
+
+  range n >>= (gen <.> succ)
+
+let reconstruct lst =
+  let len = List.fold_left (fun a -> function `Literal _ -> 1 + a | `Copy (_, len) -> len + a) 0 lst in
+  let res = Bytes.create len in
+  let pos = ref 0 in
+  List.iter (function
+      | `Literal chr -> Bytes.set res !pos chr ; incr pos
+      | `Copy (off, len) ->
+        for _ = 0 to len - 1
+        do Bytes.set res !pos (Bytes.get res (!pos - off)) ; incr pos done)
+    lst ;
+  Bytes.unsafe_to_string res
+
+let pp_code ppf = function
+  | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
+  | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d len:%d)" off len
+
+let () =
+  Crowbar.add_test ~name:"lz77" [ Crowbar.list (non_empty_bytes 1024) ] @@ fun inputs ->
+  Z.B.reset q ;
+  let state = Z.L.state `Manual ~w ~q in
+  let res = ref [] in
+  let rec go inputs = match Z.L.compress state with
+    | `End ->
+      let lst = Z.B.to_list q in
+      res := lst :: !res ;
+      Z.B.junk_exn q (List.length lst) ;
+      List.rev !res
+    | `Flush ->
+      let lst = Z.B.to_list q in
+      res := lst :: !res ;
+      Z.B.junk_exn q (List.length lst) ;
+      go inputs
+    | `Await -> match inputs with
+      | [] -> Z.L.src state Bigstringaf.empty 0 0 ; go []
+      | x :: r ->
+        let x = Bigstringaf.of_string x ~off:0 ~len:(String.length x) in
+        Z.L.src state x 0 (Bigstringaf.length x) ; go r in
+  let res = go inputs in
+  let res = List.concat res in
+
+  Fmt.epr "Results: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_code) res ;
+
+  Crowbar.check_eq ~pp:pp_string ~eq:String.equal ~cmp:String.compare (String.concat "" inputs) (reconstruct res)

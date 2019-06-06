@@ -1,5 +1,6 @@
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
+let q = Z.B.create 4096
 
 let pp_chr =
   Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
@@ -46,12 +47,15 @@ let decode =
     | _, _ -> false in
   Alcotest.testable pp equal
 
-let encode ~kind lst =
+let encode ~block:kind lst =
   let res = Buffer.create 16 in
-  let encoder = Z.N.encoder (`Buffer res) kind in
+  Z.B.reset q ; (* XXX(dinosaure): we did not share [q] with something else,
+                   safe to reset it! *)
+  let encoder = Z.N.encoder (`Buffer res) { kind; last= true; } ~q in
   List.iter (fun v -> match Z.N.encode encoder v with
       | `Ok -> ()
-      | `Partial -> Alcotest.fail "Impossible `Partial case")
+      | `Partial -> Alcotest.fail "Impossible `Partial case"
+      | `End _ -> Alcotest.fail "Impossible `End case")
     lst ;
   Buffer.contents res
 
@@ -67,7 +71,7 @@ let encode_dynamic lst =
      | _ -> ())
     lst ;
   let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
-  encode ~kind:(Z.N.Dynamic dynamic) lst
+  encode ~block:(Z.N.Dynamic dynamic) lst
 
 let invalid_complement_of_length () =
   Alcotest.test_case "invalid complement of length" `Quick @@ fun () ->
@@ -325,11 +329,11 @@ let huffman_length_extra () =
   Z.N.succ_distance distances 1 ;
   Z.N.succ_distance distances 1 ;
   let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
-  let res = encode ~kind:(Z.N.Dynamic dynamic) [ `Literal '\000'
-                                               ; `Literal '\000'
-                                               ; `Copy (1, 258)
-                                               ; `Copy (1, 256)
-                                               ; `End ] in
+  let res = encode ~block:(Z.N.Dynamic dynamic) [ `Literal '\000'
+                                                ; `Literal '\000'
+                                                ; `Copy (1, 258)
+                                                ; `Copy (1, 256)
+                                                ; `End ] in
   Alcotest.(check str) "encoding" res "\237\193\001\001\000\000\000@ \255W\027B\193\234\004" ;
 
   let decoder = Z.M.decoder (`String res) ~o ~w in
@@ -463,6 +467,44 @@ let fuzz16 () =
   let res = unroll_inflate decoder in
   Alcotest.(check str) "result" res (String.make 1068 '@')
 
+let pp_cmd ppf = function
+  | `Literal chr -> Fmt.pf ppf "(`Literal %02x)" (Char.code chr)
+  | `Copy (off, len) -> Fmt.pf ppf "(`Copy (off:%d, len:%d))" off len
+
+let eq_cmd a b = match a, b with
+  | `Literal a, `Literal b -> Char.equal a b
+  | `Copy (off_a, len_a), `Copy (off_b, len_b) -> off_a = off_b && len_a = len_b
+  | _, _ -> false
+
+let cmd = Alcotest.testable pp_cmd eq_cmd
+let cmds = Alcotest.list cmd
+
+let lz77_0 () =
+  Alcotest.test_case "simple match" `Quick @@ fun () ->
+  Z.B.reset q ;
+  let state = Z.L.state (`String "aaaaa") ~w ~q in
+  match Z.L.compress state with
+  | `End ->
+    let lst = Z.B.to_list q in
+    Alcotest.(check cmds) "result" lst [ `Literal 'a'; `Literal 'a'; `Copy (1, 3) ]
+  | `Flush -> Alcotest.fail "Unexpected `Flush return"
+  | `Await -> Alcotest.fail "Impossible `Await case"
+
+let lz77_1 () =
+  Alcotest.test_case "no match" `Quick @@ fun () ->
+  Z.B.reset q ;
+  let state = Z.L.state (`String "abcde") ~w ~q in
+  match Z.L.compress state with
+  | `End ->
+    let lst = Z.B.to_list q in
+    Alcotest.(check cmds) "result" lst [ `Literal 'a'
+                                       ; `Literal 'b'
+                                       ; `Literal 'c'
+                                       ; `Literal 'd'
+                                       ; `Literal 'e' ]
+  | `Flush -> Alcotest.fail "Unexpected `Flush return"
+  | `Await -> Alcotest.fail "Impossible `Await case"
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -497,4 +539,6 @@ let () =
               ; fuzz13 ()
               ; fuzz14 ()
               ; fuzz15 ()
-              ; fuzz16 () ] ]
+              ; fuzz16 () ]
+    ; "lz77", [ lz77_0 ()
+              ; lz77_1 () ] ]
