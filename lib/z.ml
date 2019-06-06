@@ -1566,6 +1566,8 @@ module B = struct
     let pre = t.c - msk in
     let rst = len - pre in
 
+    Fmt.epr "LEN: %d (r: %d, w: %d).\n%!" len t.r t.w ;
+
     if rst > 0
     then ( for i = 0 to pre - 1 do res := code (unsafe_get t.buf i) :: !res done
          ; for i = 0 to rst - 1 do res := code (unsafe_get t.buf i) :: !res done )
@@ -2023,7 +2025,7 @@ module W = struct
          ; update t
          ; unsafe_blit buf (off + pre) t.raw 0 rst )
     else unsafe_blit buf off t.raw msk len ;
-    if t.w + len - t.r > max then t.r <- t.r + (t.w + len - t.r) - max ;
+    if t.w + len - t.r > max then ( t.r <- t.r + (t.w + len - t.r) - max ) ;
     t.w <- t.w + len
 
   let junk t len = t.r <- t.r + len
@@ -2188,13 +2190,13 @@ module L = struct
           ( let vv = W.unsafe_get_uint16 s.w !i in
             let v = W.unsafe_get_uint8 s.w !i in
 
-            while !len <= _max_match
-                  && s.w.w - (!i + !len) > 0 (* XXX(dinosaure): stay under write cursor. *)
+            while !len + 2 <= _max_match
+                  && s.w.w - (!i + !len + 2) > 0 (* XXX(dinosaure): stay under write cursor. *)
                   && W.unsafe_get_uint16 s.w (!i + !len) == vv
             do len := !len + 2 done ;
 
-            if !len <= _max_match
-            && s.w.w - (!i + !len) > 0
+            if !len + 1 <= _max_match
+            && s.w.w - (!i + !len + 1) > 0
             && W.unsafe_get_uint8 s.w (!i + !len) == v
             then incr len ;
 
@@ -2204,15 +2206,15 @@ module L = struct
           ( let source = !i - !dst in
             (* XXX(dinosaure): try to go furthermore. *)
 
-            while !len <= _max_match
-                  && source + !len - min_int < !i + !len - min_int (* XXX(dinosaure): stay outside non-emitted characters. *)
-                  && s.w.w - (!i + !len) > 0 (* XXX(dinosaure): stay under write cursor. *)
+            while !len + 2 <= _max_match
+                  && source + !len + 2 - min_int < !i + !len + 2 - min_int (* XXX(dinosaure): stay outside non-emitted characters. *)
+                  && s.w.w - (!i + !len + 2) > 0 (* XXX(dinosaure): stay under write cursor. *)
                   && W.unsafe_get_uint16 s.w (!i + !len) == W.unsafe_get_uint16 s.w (source + !len)
             do len := !len + 2 done ;
 
-            if !len <= _max_match
-            && source + !len - min_int < !i - !len - min_int
-            && s.w.w - (!i + !len) > 0
+            if !len + 1 <= _max_match
+            && source + !len + 1 - min_int < !i - !len + 1 - min_int
+            && s.w.w - (!i + !len + 1) > 0
             && W.unsafe_get_uint8 s.w (!i + !len) == W.unsafe_get_uint8 s.w (source + !len)
             then incr len ;
 

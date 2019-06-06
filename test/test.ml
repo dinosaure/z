@@ -535,6 +535,23 @@ let lz77_2 () =
   | `Flush -> Alcotest.fail "Unexpected `Flush return"
   | `Await -> Alcotest.fail "Impossible `Await case"
 
+let lz77_3 () =
+  Alcotest.test_case "fuzz" `Quick @@ fun () ->
+  Z.B.reset q ;
+  let inputs =
+    [ "\xf6\x21\xff\x7f\x00\x9d\x0d\xf6\x21\xff\x7f"                     (* .!......!.. *)
+    ] in
+  let input = String.concat "" inputs in
+  let state = Z.L.state (`String input) ~w ~q in
+  match Z.L.compress state with
+  | `End ->
+    let lst = Z.B.to_list q in
+    Fmt.epr "compressed result: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) lst ;
+    let res = reconstruct lst in
+    Alcotest.(check str) "result" input res
+  | `Flush -> Alcotest.fail "Unexpected `Flush return"
+  | `Await -> Alcotest.fail "Impossible `Await case"
+
 
 let () =
   Alcotest.run "z"
@@ -573,4 +590,5 @@ let () =
               ; fuzz16 () ]
     ; "lz77", [ lz77_0 ()
               ; lz77_1 ()
-              ; lz77_2 () ] ]
+              ; lz77_2 ()
+              ; lz77_3 () ] ]
