@@ -706,14 +706,11 @@ module M = struct
     match jump with
     | Length ->
       let k d =
-        Fmt.epr "d.bits: %d, d.hold: %x.\n%!" d.bits d.hold ;
         let value = lit.Lookup.t.(d.hold land lit.Lookup.m) land Lookup.mask in
-        Fmt.epr "value: %x -> %d.\n%!" (d.hold land lit.Lookup.m) value ;
+        Fmt.epr "[slow] literal %d.\n%!" value ;
         let len = lit.Lookup.t.(d.hold land lit.Lookup.m) lsr 15 in
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
-
-        Fmt.epr "d.bits: %d, d.hold: %x.\n%!" d.bits d.hold ;
 
         if value < 256
         then
@@ -836,6 +833,7 @@ module M = struct
 
           if value < 256
           then ( unsafe_set_uint8 d.o !o_pos value
+               ; Fmt.epr "[fast] literal %d.\n%!" value
                ; Window.add d.w value
                ; incr o_pos
                (* ; jump := Length *) )
@@ -1098,7 +1096,7 @@ module M = struct
     | Inflate ->
       if i_rem d > 1
       then inflate d.literal d.distance d.jump d
-      else slow_inflate d.literal d.distance d.jump d
+      else ( d.s <- Slow ; slow_inflate d.literal d.distance d.jump d )
     | Slow -> d.k d
     | Flat_header -> d.k d
     | Flat -> flat d

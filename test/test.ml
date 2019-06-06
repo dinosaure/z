@@ -467,6 +467,19 @@ let fuzz16 () =
   let res = unroll_inflate decoder in
   Alcotest.(check str) "result" res (String.make 1068 '@')
 
+let fuzz17 () =
+  Alcotest.test_case "fuzz17" `Quick @@ fun () ->
+  let lst = [ `Literal (Char.chr 218); `Copy (1, 21); `Literal (Char.chr 190); `Literal (Char.chr 218); `Literal (Char.chr 0); `End ] in
+  let res = encode_dynamic lst in
+  let decoder = Z.M.decoder (`String res) ~o ~w in
+  let res = unroll_inflate decoder in
+  let outputs =
+    [ "\xda\xda\xda\xda\xda\xda\xda\xda\xda\xda\xda\xda\xda\xda\xda\xda" (* ................ *)
+    ; "\xda\xda\xda\xda\xda\xda\xbe\xda\x00"                             (* ......... *)
+    ] in
+  let output = String.concat "" outputs in
+  Alcotest.(check str) "result" res output
+
 let pp_cmd ppf = function
   | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
   | `Copy (off, len) -> Fmt.pf ppf "(`Copy (off:%d, len:%d))" off len
@@ -552,6 +565,25 @@ let lz77_3 () =
   | `Flush -> Alcotest.fail "Unexpected `Flush return"
   | `Await -> Alcotest.fail "Impossible `Await case"
 
+let lz77_4 () =
+  Alcotest.test_case "fuzz" `Quick @@ fun () ->
+  Z.B.reset q ;
+  let inputs =
+    [ "\x02\x21\xf9\x1c\xf1\x9d\x0e\x02\xbc\xbc\x1c\xf9\xd9\xa3\x28\x53" (* .!............(S *)
+    ; "\x53\x53\x53\x53\x53\x53\x53\x53\x53\x53\x53\x53\x53\x53\x53\x53" (* SSSSSSSSSSSSSSSS *)
+    ; "\x53\x53\x53\x53\x53\x53\x53\x7f\x0e\xff\xe8\x03\x00\x00\x00\xff" (* SSSSSSS......... *)
+    ; "\xff\x57\xff\xe8\x03\x00"                                         (* .W.... *)
+    ] in
+  let input = String.concat "" inputs in
+  let state = Z.L.state (`String input) ~w ~q in
+  match Z.L.compress state with
+  | `End ->
+    let lst = Z.B.to_list q in
+    Fmt.epr "compressed result: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) lst ;
+    let res = reconstruct lst in
+    Alcotest.(check str) "result" input res
+  | `Flush -> Alcotest.fail "Unexpected `Flush return"
+  | `Await -> Alcotest.fail "Impossible `Await case"
 
 let () =
   Alcotest.run "z"
@@ -587,8 +619,10 @@ let () =
               ; fuzz13 ()
               ; fuzz14 ()
               ; fuzz15 ()
-              ; fuzz16 () ]
+              ; fuzz16 ()
+              ; fuzz17 () ]
     ; "lz77", [ lz77_0 ()
               ; lz77_1 ()
               ; lz77_2 ()
-              ; lz77_3 () ] ]
+              ; lz77_3 ()
+              ; lz77_4 () ] ]
