@@ -160,6 +160,8 @@ let () =
   if not (check_cmds cmds) then Crowbar.bad_test () ;
   Z.B.reset q ;
 
+  Fmt.epr "deflated: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) cmds ;
+
   let expected = apply_cmds cmds in
   let buf = Buffer.create 16 in
   let literals, distances = frequencies_of_cmds cmds in
@@ -175,7 +177,6 @@ let () =
   let res1 = z bytes in
 
   Fmt.epr "deflated: %S.\n%!" bytes ;
-  Fmt.epr "deflated: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) cmds ;
   Fmt.epr "inflated (zlib): %S.\n%!" res0 ;
   Fmt.epr "inflated (z): %S.\n%!" res1 ;
   Fmt.epr "inflated (fuzz): %S.\n%!" expected ;
