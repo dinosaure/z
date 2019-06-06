@@ -1985,6 +1985,17 @@ module W = struct
     let c = Checkseum.Adler32.unsafe_digest_bigstring w.raw 0 max w.c in
     w.c <- c
 
+  let iter t f =
+    let len = size t in
+    let msk = mask t.r in
+    let pre = max - msk in
+    let rst = len - pre in
+
+    if rst > 0
+    then ( for i = 0 to pre - 1 do f (unsafe_get_char t.raw (msk + i)) done
+         ; for i = 0 to rst - 1 do f (unsafe_get_char t.raw i) done )
+    else for i = 0 to len - 1 do f (unsafe_get_char t.raw (msk + i)) done
+
   (* XXX(dinosaure): [unsafe_] means that [i] can be out of [r] and [w] - but
      still is a valid index in [raw]. *)
   let unsafe_get_char t i = unsafe_get_char t.raw (mask i) [@@inline always]
@@ -2048,6 +2059,9 @@ module L = struct
     ; b : B.t
     ; mutable k : state -> decode }
 
+  let literals s = s.l
+  let distances s = s.d
+
   let eoi s =
     s.i <- bigstring_empty ;
     s.i_pos <- 0 ;
@@ -2099,6 +2113,7 @@ module L = struct
          ; B.blit s.b s.w.raw 0 rst )
     else B.blit s.b s.w.raw msk len ;
 
+    W.iter s.w (N.succ_literal s.l) ;
     W.junk s.w len ;
 
     if W.is_empty s.w
@@ -2136,9 +2151,13 @@ module L = struct
 
     (* XXX(dinosaure): prelude, a [match] is >= 3.  *)
     Fmt.epr ">>> Record literal:%02x:%a.\n%!" (W.unsafe_get_uint8 s.w !i) pp_chr (W.unsafe_get_char s.w !i) ;
-    B.push_exn s.b (B.cmd (`Literal (W.unsafe_get_char s.w !i))) ; incr i ;
+    let chr = W.unsafe_get_char s.w !i in
+    B.push_exn s.b (B.cmd (`Literal chr)) ; incr i ;
+    N.succ_literal s.l chr ;
+    let chr = W.unsafe_get_char s.w !i in
     Fmt.epr ">>> Record literal:%02x:%a.\n%!" (W.unsafe_get_uint8 s.w !i) pp_chr (W.unsafe_get_char s.w !i) ;
     B.push_exn s.b (B.cmd (`Literal (W.unsafe_get_char s.w !i))) ; incr i ;
+    N.succ_literal s.l chr ;
 
     while s.w.w - !i >= 3 && not (B.is_full s.b) do
       try
@@ -2170,7 +2189,9 @@ module L = struct
       with
       | Literal ->
         Fmt.epr ">>> Record literal:%02x:%a.\n%!" (W.unsafe_get_uint8 s.w !i) pp_chr (W.unsafe_get_char s.w !i) ;
-        B.push_exn s.b (B.cmd (`Literal (W.unsafe_get_char s.w !i))) ; incr i
+        let chr = W.unsafe_get_char s.w !i in
+        B.push_exn s.b (B.cmd (`Literal chr)) ; incr i ;
+        N.succ_literal s.l chr
       | Match ->
         if !dst == 1
         then
@@ -2188,7 +2209,9 @@ module L = struct
             then incr len ;
 
             Fmt.epr ">>> Record distance, off:%d, len:%d.\n%!" !dst !len ;
-            B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len )
+            B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len ;
+            N.succ_length s.l !len ;
+            N.succ_distance s.d !dst )
         else
           ( let source = !i - !dst in
             (* XXX(dinosaure): try to go furthermore. *)
@@ -2206,7 +2229,9 @@ module L = struct
             then incr len ;
 
             Fmt.epr ">>> Record distance, off:%d, len:%d.\n%!" !dst !len ;
-            B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len )
+            B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len ;
+            N.succ_length s.l !len ;
+            N.succ_distance s.d !dst )
     done ;
 
     W.junk s.w (!i - s.w.r) ;
