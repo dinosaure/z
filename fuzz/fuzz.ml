@@ -74,7 +74,7 @@ let uniq =
   let v = ref (-1) in
   fun () -> incr v ; !v
 
-let lol () =
+let () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.bytes ] @@ fun bytes ->
   Fmt.epr "Test %S.\n%!" bytes ;
   let res0 = zlib bytes in
