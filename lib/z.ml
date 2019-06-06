@@ -997,37 +997,25 @@ module M = struct
       make_table r hlit hdist d in
     (* XXX(dinosaure): [prv] and [i] are stored as associated env of [go]. We
        can not retake them from [d.s]. *)
-    let rec go prv i v d =
-      match v with
-      | 16 ->
-        let k n d =
-          if i + n + 3 > max_res then err_invalid_dictionary d
-          else
-            ( for j = 0 to n + 3 - 1 do res.(i + j) <- prv done
-            ; if i + n + 3 < max_res then get (go prv (i + n + 3)) d else ret res d ) in
-        get_bits 2 k d
-      | 17 ->
-        let k n d =
-          if i + n + 3 > max_res then err_invalid_dictionary d
-          else
-            (if i + n + 3 < max_res then get (go prv (i + n + 3)) d else ret res d) in
-        get_bits 3 k d
-      | 18 ->
-        let k n d =
-          if i + n + 11 > max_res then err_invalid_dictionary d
-          else
-            (if i + n + 11 < max_res then get (go prv (i + n + 11)) d else ret res d) in
-        get_bits 7 k d
-      | n ->
-        if n < 16
-        then
-          ( res.(i) <- n
-          ; if i + 1 < max_res
-            (* XXX(dinosaure): [prv] is the last [n < 16] or the last [v]? *)
-            then get (go n (i + 1)) d
-            else ret res d )
-        else err_invalid_dictionary d in
-    let k v d = go 0 0 v d in
+    let rec record i copy len d =
+      if i + copy > max_res then err_invalid_dictionary d
+      else ( for x = 0 to copy - 1 do res.(i + x) <- len done
+           ; if i + copy < max_res then get (fun d -> go (i + copy) d) d else ret res d )
+    and go i v d =
+      if v < 16
+      then ( res.(i) <- v
+           ; if succ i < max_res then get (fun d -> go (succ i) d) d else ret res d )
+      else if v == 16
+      then ( let k v d = record i (v + 3) res.(i - 1) d in
+             if i == 0 then err_invalid_dictionary d else get_bits 2 k d )
+      else if v == 17
+      then ( let k v d = record i (v + 3) 0 d in
+             get_bits 3 k d )
+      else if v == 18
+      then ( let k v d = record i (v + 11) 0 d in
+             get_bits 7 k d )
+      else assert false (* TODO: really never occur? *) in
+    let k v d = go 0 v d in
     get k d
 
   let table d =

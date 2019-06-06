@@ -95,9 +95,7 @@ let invalid_bit_length_repeat () =
   Alcotest.test_case "invalid bit length repeat" `Quick @@ fun () ->
   let decoder = Z.M.decoder (`String "\x04\x00\x24\x49\x00") ~o ~w in
   Alcotest.(check decode) "invalid bit length repeat"
-    (Z.M.decode decoder) (`Malformed "Unexpected end of input")
-(* XXX(dinosaure): error is not conform to what we expect (best will be [Invalid
-   dictionary]), TODO! *)
+    (Z.M.decode decoder) (`Malformed "Invalid dictionary")
 
 let invalid_codes () =
   Alcotest.test_case "invalid codes -- missing end-of-block" `Quick @@ fun () ->
@@ -480,6 +478,26 @@ let fuzz17 () =
   let output = String.concat "" outputs in
   Alcotest.(check str) "result" res output
 
+let fuzz18 () =
+  Alcotest.test_case "fuzz18" `Quick @@ fun () ->
+  let inputs =
+    [ "\x75\x8f\xcd\x0e\x02\x21\x0c\x84\x3d\xf3\x14\x3d\xfc\x54\x63\xb2" (* u....!..=..=.Tc. *)
+    ; "\x0f\x64\xf8\x69\xdc\xc6\xc2\x12\x58\x12\xe4\xe9\x5d\xa3\x28\x26" (* .d.i....X...].(& *)
+    ; "\xee\xad\x33\xcd\xfc\x9d\x1a\x5e\x1e\xcc\xe7\xf9\x24\x99\x40\x06" (* ..3....^....$.@. *)
+    ; "\xed\x11\x4c\x56\xfb\xe8\x57\x57\x0a\xf3\x5b\xd9\xcb\x60\xd5\xd5" (* ..LV..WW..[..`.. *)
+    ] in
+  let input = String.concat "" inputs in
+  let decoder = Z.M.decoder (`String input) ~o ~w in
+  let res = unroll_inflate decoder in
+  let outputs =
+    [ "\x75\x27\x5a\xfb\x64\x64\x2b\x63\x29\x67\x6e\x60\x20\x67\x6e\x60" (* u'Z.dd+c)gn` gn` *)
+    ; "\x20\x67\x6e\x60\x5e\x28\x20\x5d\x6e\x0a\x63\x29\x67\x6e\x60\x20" (*  gn`^( ]n.c)gn`  *)
+    ; "\x67\x6e\x60\x20\x67\x6e\x63\x29\x67\x6e\x60\x20\x67\x73\x60\x69" (* gn` gnc)gn` gs`i *)
+    ; "\x63"                                                             (* c *)
+    ] in
+  let output = String.concat "" outputs in
+  Alcotest.(check str) "result" res output
+
 let pp_cmd ppf = function
   | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
   | `Copy (off, len) -> Fmt.pf ppf "(`Copy (off:%d, len:%d))" off len
@@ -631,7 +649,8 @@ let () =
               ; fuzz14 ()
               ; fuzz15 ()
               ; fuzz16 ()
-              ; fuzz17 () ]
+              ; fuzz17 ()
+              ; fuzz18 () ]
     ; "lz77", [ lz77_0 ()
               ; lz77_1 ()
               ; lz77_2 ()
