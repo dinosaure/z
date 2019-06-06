@@ -585,6 +585,17 @@ let lz77_4 () =
   | `Flush -> Alcotest.fail "Unexpected `Flush return"
   | `Await -> Alcotest.fail "Impossible `Await case"
 
+let hang0 () =
+  Alcotest.test_case "hang" `Quick @@ fun () ->
+  let lst =
+    [ `Literal '\003'; `Literal '\012'; `Copy (1, 247)
+    ; `Literal 'W'; `Literal '\243'; `Copy (244, 15); `End ] in
+  let res = encode_dynamic lst in
+  Fmt.epr "> %S.\n%!" res ;
+  let decoder = Z.M.decoder (`String res) ~o ~w in
+  let _ = unroll_inflate decoder in
+  ()
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -625,4 +636,5 @@ let () =
               ; lz77_1 ()
               ; lz77_2 ()
               ; lz77_3 ()
-              ; lz77_4 () ] ]
+              ; lz77_4 () ]
+    ; "hang", [ hang0 () ] ]

@@ -1878,7 +1878,8 @@ module N = struct
     e.bits <- !bits ;
     e.o_pos <- !o_pos ;
 
-    if o_rem e > 0 then flush k e else k e
+    (* XXX(dinosaure): at least we need 2 bytes in any case. *)
+    if o_rem e > 1 then k e else flush k e
 
   and encode_end k e =
     let rec pending_bits e =
