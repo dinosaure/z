@@ -55,7 +55,7 @@ let encode ~block:kind lst =
   List.iter (fun v -> match Z.N.encode encoder v with
       | `Ok -> ()
       | `Partial -> Alcotest.fail "Impossible `Partial case"
-      | `End _ -> Alcotest.fail "Impossible `End case")
+      | `End -> Alcotest.fail "Impossible `End case")
     lst ;
   Buffer.contents res
 
@@ -501,10 +501,12 @@ let fuzz18 () =
 let pp_cmd ppf = function
   | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
   | `Copy (off, len) -> Fmt.pf ppf "(`Copy (off:%d, len:%d))" off len
+  | `End -> Fmt.string ppf "`End"
 
 let eq_cmd a b = match a, b with
   | `Literal a, `Literal b -> Char.equal a b
   | `Copy (off_a, len_a), `Copy (off_b, len_b) -> off_a = off_b && len_a = len_b
+  | `End, `End -> true
   | _, _ -> false
 
 let cmd = Alcotest.testable pp_cmd eq_cmd
@@ -537,14 +539,15 @@ let lz77_1 () =
   | `Await -> Alcotest.fail "Impossible `Await case"
 
 let reconstruct lst =
-  let len = List.fold_left (fun a -> function `Literal _ -> 1 + a | `Copy (_, len) -> len + a) 0 lst in
+  let len = List.fold_left (fun a -> function `Literal _ -> 1 + a | `Copy (_, len) -> len + a | `End -> a) 0 lst in
   let res = Bytes.create len in
   let pos = ref 0 in
   List.iter (function
       | `Literal chr -> Bytes.set res !pos chr ; incr pos
       | `Copy (off, len) ->
         for _ = 0 to len - 1
-        do Bytes.set res !pos (Bytes.get res (!pos - off)) ; incr pos done)
+        do Bytes.set res !pos (Bytes.get res (!pos - off)) ; incr pos done
+      | `End -> () (* XXX(dinosaure): should be the last *))
     lst ;
   Bytes.unsafe_to_string res
 

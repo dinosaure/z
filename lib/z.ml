@@ -1503,6 +1503,12 @@ module B = struct
     let r = unsafe_get t.buf ((mask [@inlined]) t t.r) in
     t.r <- t.r + 1 ; r
 
+  let peek_exn t =
+    if (empty [@inlined]) t then raise Empty ;
+    unsafe_get t.buf ((mask [@inlined]) t t.r)
+
+  let unsafe_junk t = t.r <- t.r + 1
+
   let junk_exn t n =
     if (size [@inlined]) t < n then Fmt.invalid_arg "You want to junk more than what we have" ;
     t.r <- t.r + n
@@ -1519,7 +1525,8 @@ module B = struct
     | `Copy (off, len) -> copy ~off ~len
 
   let code cmd = match cmd land 0x2000000 <> 0 with
-    | false -> `Literal (Char.chr (cmd land 0xff))
+    | false ->
+      if cmd == 256 then `End else `Literal (Char.chr (cmd land 0xff))
     | true ->
       let off = (cmd land 0xffff) + 1 in
       let len = ((cmd lsr 16) land 0x1ff) + 3 in (* XXX(dinosaure): ((1 lsl 9) - 1) - 0xff *)
@@ -1661,13 +1668,13 @@ module N = struct
   type encode = [ code | `Await | `Flush | `End | `Block of block ]
 
   let exists v block = match v, block.kind with
-    | `Copy _, Flat _ -> Fmt.invalid_arg "copy code in flat block can not exist"
+    | (`Copy _ | `End), Flat _ -> Fmt.invalid_arg "copy code in flat block can not exist"
     | `Literal chr, Dynamic dynamic ->
       dynamic.ltree.T.lengths.(Char.code chr) > 0
     | `Copy (off, len), Dynamic dynamic ->
       dynamic.ltree.T.lengths.(256 + 1 + _length.(len - 3)) > 0
       && dynamic.dtree.T.lengths.(_distance (pred off)) > 0
-    | `Literal _, (Flat _ | Fixed) | `Copy _, Fixed -> true
+    | `End, (Fixed | Dynamic _) | `Literal _, (Flat _ | Fixed) | `Copy _, Fixed -> true
 
   type encoder =
     { dst : dst
@@ -1679,7 +1686,7 @@ module N = struct
     ; mutable o_pos : int
     ; mutable o_max : int
     ; b : B.t
-    ; mutable k : encoder -> encode -> [ `Ok | `Partial | `End of code ] }
+    ; mutable k : encoder -> encode -> [ `Ok | `Partial | `End ] }
 
   (* remaining bytes to write in [e.o]. *)
   let o_rem e = e.o_max - e.o_pos + 1
@@ -1791,6 +1798,25 @@ module N = struct
 
     k0 e
 
+  let pending_bits k e =
+    assert (e.bits <= 16) ;
+
+    if e.bits > 8
+    then ( let k e =
+              e.hold <- 0 ;
+              e.bits_rem <- `Rem (16 - e.bits) ;
+              e.bits <- 0 ;
+              k e in
+            c_short (e.hold land 0xffff) k e )
+    else if e.bits > 0
+    then ( let k e =
+              e.hold <- 0 ;
+              e.bits_rem <- `Rem (8 - e.bits) ;
+              e.bits <- 0 ;
+              k e in
+            c_byte (e.hold land 0xff) k e )
+    else k e
+
   let rec block e = function
     | `Await ->
       e.k <- block ; `Ok
@@ -1814,6 +1840,8 @@ module N = struct
     let hold = ref e.hold in
     let bits = ref e.bits in
 
+    let exception End in
+
     let emit e =
       if !bits >= 16
       then ( unsafe_set_uint16 e.o !o_pos !hold
@@ -1822,74 +1850,78 @@ module N = struct
            ; bits := !bits - 16
            ; o_pos := !o_pos + 2 ) in
 
-    while e.o_max - !o_pos + 1 > 1 && not (B.is_empty e.b) do
-      let cmd = B.pop_exn e.b in
+    try while e.o_max - !o_pos + 1 > 1 && not (B.is_empty e.b) do
+        let cmd = B.peek_exn e.b in
 
-      match cmd land 0x2000000 == 0, e.blk with
-      | true, { kind= Dynamic dynamic; _ } ->
-        Fmt.epr "<<< literal %3d.\n%!" cmd ;
+        if not (exists (B.code cmd) e.blk)
+        then raise_notrace End
+        else B.unsafe_junk e.b ;
 
-        let len, v = Lookup.get dynamic.ltree.T.tree cmd in
+        match cmd land 0x2000000 == 0, e.blk with
+        | true, { kind= Dynamic dynamic; _ } ->
+          Fmt.epr "<<< literal %3d.\n%!" cmd ;
+
+          let len, v = Lookup.get dynamic.ltree.T.tree cmd in
+          hold := (v lsl !bits) lor !hold ;
+          bits := !bits + len ;
+          emit e
+        | false, { kind= Dynamic dynamic; _ } ->
+          let off, len = cmd land 0xffff, (cmd lsr 16) land 0x1ff in
+
+          Fmt.epr "<<< copy off:%d, len:%d.\n%!" (off + 1) (len + 3);
+
+          let code = _length.(len) in
+          let len0, v0 = Lookup.get dynamic.ltree.T.tree (code + 256 + 1) in
+          (* len0_max: 15 *)
+          let len1, v1 = _extra_lbits.(code), len - _base_length.(code)  in
+          (* len1_max: 5 *)
+
+          let code = _distance off in
+          let len2, v2 = Lookup.get dynamic.dtree.T.tree code in
+          (* len2_max: 15 *)
+          let len3, v3 = _extra_dbits.(code), off - _base_dist.(code) in
+          (* len3_max: 13 *)
+
+          hold :=
+                  (v3 lsl (!bits + len0 + len1 + len2))
+              lor (v2 lsl (!bits + len0 + len1))
+              lor (v1 lsl (!bits + len0))
+              lor (v0 lsl !bits)
+              lor !hold ;
+          bits := !bits + len0 + len1 + len2 + len3 ;
+          (* len_max: 48 *)
+          emit e
+        | _, _ -> assert false (* TODO *)
+      done ;
+
+      Fmt.epr "leave hot-loop [o_rem: %d], [queue is empty: %b].\n%!"
+        (o_rem e) (B.is_empty e.b) ;
+
+      e.hold <- !hold ;
+      e.bits <- !bits ;
+      e.o_pos <- !o_pos ;
+
+      (* XXX(dinosaure): at least we need 2 bytes in any case. *)
+      if o_rem e > 1 then k e else flush k e
+    with End -> match e.blk with
+      | { kind= Dynamic dynamic; _ } ->
+        (* XXX(dinosaure): it's safe because we raise End only if [e.o_max - !o_pos + 1 > 1]. *)
+        let len, v = Lookup.get dynamic.ltree.T.tree 256 in
         hold := (v lsl !bits) lor !hold ;
         bits := !bits + len ;
-        emit e
-      | false, { kind= Dynamic dynamic; _ } ->
-        let off, len = cmd land 0xffff, (cmd lsr 16) land 0x1ff in
+        emit e ;
 
-        Fmt.epr "<<< copy off:%d, len:%d.\n%!" (off + 1) (len + 3);
+        e.hold <- !hold ;
+        e.bits <- !bits ;
+        e.o_pos <- !o_pos ;
 
-        let code = _length.(len) in
-        let len0, v0 = Lookup.get dynamic.ltree.T.tree (code + 256 + 1) in
-        (* len0_max: 15 *)
-        let len1, v1 = _extra_lbits.(code), len - _base_length.(code)  in
-        (* len1_max: 5 *)
-
-        let code = _distance off in
-        let len2, v2 = Lookup.get dynamic.dtree.T.tree code in
-        (* len2_max: 15 *)
-        let len3, v3 = _extra_dbits.(code), off - _base_dist.(code) in
-        (* len3_max: 13 *)
-
-        hold :=
-                (v3 lsl (!bits + len0 + len1 + len2))
-            lor (v2 lsl (!bits + len0 + len1))
-            lor (v1 lsl (!bits + len0))
-            lor (v0 lsl !bits)
-            lor !hold ;
-        bits := !bits + len0 + len1 + len2 + len3 ;
-        (* len_max: 48 *)
-        emit e
-      | _, _ -> assert false (* TODO *)
-    done ;
-
-    e.hold <- !hold ;
-    e.bits <- !bits ;
-    e.o_pos <- !o_pos ;
-
-    (* XXX(dinosaure): at least we need 2 bytes in any case. *)
-    if o_rem e > 1 then k e else flush k e
+        let k e = e.k <- if e.blk.last then nothing else block ; `End in
+        if e.blk.last then pending_bits k e else k e
+      | _ -> assert false (* TODO *)
 
   and encode_end k e =
-    let rec pending_bits e =
-      assert (e.bits <= 16) ;
-
-      if e.bits > 8
-      then ( let k e =
-               e.hold <- 0 ;
-               e.bits_rem <- `Rem (16 - e.bits) ;
-               e.bits <- 0 ;
-               k e in
-             c_short (e.hold land 0xffff) k e )
-      else if e.bits > 0
-      then ( let k e =
-               e.hold <- 0 ;
-               e.bits_rem <- `Rem (8 - e.bits) ;
-               e.bits <- 0 ;
-               k e in
-             c_byte (e.hold land 0xff) k e )
-      else k e
-    and pending_cmds e =
-      if B.is_empty e.b then ( if e.blk.last then pending_bits e else k e ) else write pending_cmds e
+    let rec pending_cmds e =
+      if B.is_empty e.b then ( if e.blk.last then pending_bits k e else k e ) else write pending_cmds e
     and push_end e =
       if B.full e.b then write push_end e
       else ( B.push_exn e.b 256 ; pending_cmds e ) in
@@ -1903,11 +1935,8 @@ module N = struct
 
   and encode e = function
     | #code as v ->
-      if not (exists v e.blk)
-      then ( let k e = e.k <- if e.blk.last then nothing else block ; `End v in
-             encode_end (fun e -> flush k e) e )
-      else ( let k e = e.k <- encode ; `Ok in
-             encode_cmd (B.cmd v) k e )
+      let k e = e.k <- encode ; `Ok in
+      encode_cmd (B.cmd v) k e
     | `Await -> e.k <- encode ; `Ok (* XXX(dinosaure): do nothing. *)
     | `Flush ->
       let k e = e.k <- encode ; `Ok in
