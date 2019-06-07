@@ -30,7 +30,14 @@ let unsafe_set_uint16 =
 external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
 external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
 
-let output_bigstring _ _ _ _ = () (* TODO: output bigstring into an [out_channel] *)
+let output_bigstring oc buf off len =
+  let tmp = Bigstringaf.substring buf ~off ~len in
+  output_string oc tmp
+
+let input_bigstring ic buf off len =
+  let tmp = Bytes.create len in
+  let res = input ic tmp 0 len in
+  Bigstringaf.blit_from_bytes tmp ~src_off:0 buf ~dst_off:off ~len:res ; res
 
 let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
 
@@ -194,6 +201,81 @@ let _base_dist =
   [| 0; 1; 2; 3; 4; 6; 8; 12; 16; 24; 32; 48; 64; 96; 128; 192; 256; 384; 512
    ; 768; 1024; 1536; 2048; 3072; 4096; 6144; 8192; 12288; 16384; 24576; (-1); (-1) |]
 
+module Lookup = struct
+  type t =
+    { t : int array
+    ; m : int
+    ; l : int }
+
+  let mask = (1 lsl _max_bits) - 1
+  let make t m = { t; m= (1 lsl m) - 1; l= m }
+
+  let get t i =
+    let v = t.t.(i) in v lsr _max_bits, v land mask (* allocation *)
+  [@@inline]
+
+  let pp ppf t =
+    Fmt.pf ppf "{ @[<hov>t = @[<hov>%a@];@ m = %x;@ l = %d;@] }"
+      Fmt.(Dump.array int) t.t t.m t.l
+end
+
+let _static_ltree =
+  [|  (12, 8); (140, 8);  (76, 8); (204, 8);  (44, 8); (172, 8); (108, 8)
+   ; (236, 8);  (28, 8); (156, 8);  (92, 8); (220, 8);  (60, 8); (188, 8)
+   ; (124, 8); (252, 8);   (2, 8); (130, 8);  (66, 8); (194, 8);  (34, 8)
+   ; (162, 8);  (98, 8); (226, 8);  (18, 8); (146, 8);  (82, 8); (210, 8)
+   ;  (50, 8); (178, 8); (114, 8); (242, 8);  (10, 8); (138, 8);  (74, 8)
+   ; (202, 8);  (42, 8); (170, 8); (106, 8); (234, 8);  (26, 8); (154, 8)
+   ;  (90, 8); (218, 8);  (58, 8); (186, 8); (122, 8); (250, 8);   (6, 8)
+   ; (134, 8);  (70, 8); (198, 8);  (38, 8); (166, 8); (102, 8); (230, 8)
+   ;  (22, 8); (150, 8);  (86, 8); (214, 8);  (54, 8); (182, 8); (118, 8)
+   ; (246, 8);  (14, 8); (142, 8);  (78, 8); (206, 8);  (46, 8); (174, 8)
+   ; (110, 8); (238, 8);  (30, 8); (158, 8);  (94, 8); (222, 8);  (62, 8)
+   ; (190, 8); (126, 8); (254, 8);   (1, 8); (129, 8);  (65, 8); (193, 8)
+   ;  (33, 8); (161, 8);  (97, 8); (225, 8);  (17, 8); (145, 8);  (81, 8)
+   ; (209, 8);  (49, 8); (177, 8); (113, 8); (241, 8);   (9, 8); (137, 8)
+   ;  (73, 8); (201, 8);  (41, 8); (169, 8); (105, 8); (233, 8);  (25, 8)
+   ; (153, 8);  (89, 8); (217, 8);  (57, 8); (185, 8); (121, 8); (249, 8)
+   ;   (5, 8); (133, 8);  (69, 8); (197, 8);  (37, 8); (165, 8); (101, 8)
+   ; (229, 8);  (21, 8); (149, 8);  (85, 8); (213, 8);  (53, 8); (181, 8)
+   ; (117, 8); (245, 8);  (13, 8); (141, 8);  (77, 8); (205, 8);  (45, 8)
+   ; (173, 8); (109, 8); (237, 8);  (29, 8); (157, 8);  (93, 8); (221, 8)
+   ;  (61, 8); (189, 8); (125, 8); (253, 8);  (19, 9); (275, 9); (147, 9)
+   ; (403, 9);  (83, 9); (339, 9); (211, 9); (467, 9);  (51, 9); (307, 9)
+   ; (179, 9); (435, 9); (115, 9); (371, 9); (243, 9); (499, 9);  (11, 9)
+   ; (267, 9); (139, 9); (395, 9);  (75, 9); (331, 9); (203, 9); (459, 9)
+   ;  (43, 9); (299, 9); (171, 9); (427, 9); (107, 9); (363, 9); (235, 9)
+   ; (491, 9);  (27, 9); (283, 9); (155, 9); (411, 9);  (91, 9); (347, 9)
+   ; (219, 9); (475, 9);  (59, 9); (315, 9); (187, 9); (443, 9); (123, 9)
+   ; (379, 9); (251, 9); (507, 9);   (7, 9); (263, 9); (135, 9); (391, 9)
+   ;  (71, 9); (327, 9); (199, 9); (455, 9);  (39, 9); (295, 9); (167, 9)
+   ; (423, 9); (103, 9); (359, 9); (231, 9); (487, 9);  (23, 9); (279, 9)
+   ; (151, 9); (407, 9);  (87, 9); (343, 9); (215, 9); (471, 9);  (55, 9)
+   ; (311, 9); (183, 9); (439, 9); (119, 9); (375, 9); (247, 9); (503, 9)
+   ;  (15, 9); (271, 9); (143, 9); (399, 9);  (79, 9); (335, 9); (207, 9)
+   ; (463, 9);  (47, 9); (303, 9); (175, 9); (431, 9); (111, 9); (367, 9)
+   ; (239, 9); (495, 9);  (31, 9); (287, 9); (159, 9); (415, 9);  (95, 9)
+   ; (351, 9); (223, 9); (479, 9);  (63, 9); (319, 9); (191, 9); (447, 9)
+   ; (127, 9); (383, 9); (255, 9); (511, 9);   (0, 7);  (64, 7);  (32, 7);  (96, 7)
+   ;  (16, 7);  (80, 7);  (48, 7); (112, 7);   (8, 7);  (72, 7);  (40, 7); (104, 7)
+   ;  (24, 7);  (88, 7);  (56, 7); (120, 7);   (4, 7);  (68, 7);  (36, 7); (100, 7)
+   ;  (20, 7);  (84, 7);  (52, 7); (116, 7);   (3, 8); (131, 8);  (67, 8); (195, 8)
+   ;  (35, 8); (163, 8);  (99, 8); (227, 8) |]
+
+let _static_ltree =
+  let t = Array.map (fun (v, l) -> (l lsl _max_bits) lor v) _static_ltree in
+  Lookup.make t 9
+
+let _static_dtree =
+  [| (0, 5); (16, 5);  (8, 5); (24, 5); (4, 5); (20, 5); (12, 5); (28, 5)
+   ; (2, 5); (18, 5); (10, 5); (26, 5); (6, 5); (22, 5); (14, 5); (30, 5)
+   ; (1, 5); (17, 5);  (9, 5); (25, 5); (5, 5); (21, 5); (13, 5); (29, 5)
+   ; (3, 5); (19, 5); (11, 5); (27, 5); (7, 5); (23, 5) |]
+
+let _static_dtree =
+  let t = Array.map (fun (v, l) -> (l lsl _max_bits) lor v) _static_dtree in
+  Lookup.make t 5
+
 (* XXX(dinosaure): [zlib] raises "Invalid distance code" where it wants to
    access to [base_dist.(30|31)]. It uses a smart mask to catch this behavior.
    In this code, we did not raise an error nor /compromise/ output when we
@@ -238,24 +320,6 @@ module Heap = struct
     | Node (p, e, l, r) ->
       Fmt.pf ppf "(Node (priority: %d, e: %a, l: %a, r: %a))"
         p pp_data e (Fmt.hvbox (pp pp_data)) l (Fmt.hvbox (pp pp_data)) r
-end
-
-module Lookup = struct
-  type t =
-    { t : int array
-    ; m : int
-    ; l : int }
-
-  let mask = (1 lsl _max_bits) - 1
-  let make t m = { t; m= (1 lsl m) - 1; l= m }
-
-  let get t i =
-    let v = t.t.(i) in v lsr _max_bits, v land mask (* allocation *)
-  [@@inline]
-
-  let pp ppf t =
-    Fmt.pf ppf "{ @[<hov>t = @[<hov>%a@];@ m = %x;@ l = %d;@] }"
-      Fmt.(Dump.array int) t.t t.m t.l
 end
 
 module Window = struct
@@ -512,7 +576,9 @@ module M = struct
   let refill k d = match d.src with
     | `String _ ->
       eoi d ; k d
-    | `Channel _ -> assert false (* TODO *)
+    | `Channel ic ->
+      let res = input_bigstring ic d.i 0 (Bigstringaf.length d.i) in
+      src d d.i 0 res ; k d
     | `Manual ->
       d.k <- k ; Await
 
@@ -1029,6 +1095,7 @@ module M = struct
     while !i < hclen
     do
       let code = !hold land 0x7 in
+      Fmt.epr "blcode: %d.\n%!" code ;
       res.(zigzag.(!i)) <- code ;
       hold := !hold lsr 3 ;
       bits := !bits - 3 ;
@@ -1105,7 +1172,7 @@ module M = struct
     let i, i_pos, i_len = match src with
       | `Manual -> bigstring_empty, 1, 0
       | `String x -> bigstring_of_string x, 0, String.length x - 1
-      | `Channel _ -> assert false in
+      | `Channel _ -> bigstring_create io_buffer_size, 1, 0 in
     { src
     ; i
     ; i_pos
@@ -1136,7 +1203,7 @@ module T = struct
       ; len= 0
       ; max= _heap_size }
 
-    let populate ~freqs tree_lengths ~depth heap =
+    let populate ~length ~freqs tree_lengths ~depth heap =
       (* assert (Array.length tree_lengths = Array.length freqs) ;
          assert (Array.length depth = heap.max) ;
          assert (Array.length heap.heap = heap.max) ;
@@ -1147,7 +1214,7 @@ module T = struct
       (* Construct the initial heap, with least frequent element in
          heap[SMALLEST]. The sons of heap[n] are heap[2*n] and heap[2*n+1].
          heap[0] is not used. *)
-      for n = 0 to pred (Array.length freqs)
+      for n = 0 to length - 1
       do
         if freqs.(n) <> 0
         then
@@ -1237,11 +1304,15 @@ module T = struct
     for bits = 1 to _max_bits
     do
       code := (!code + bl_count.(bits - 1)) lsl 1 ;
-      next_code.(bits) <- !code ;
+      Fmt.epr "BL COUNT(%d): %d.\n%!" (bits - 1) bl_count.(bits - 1) ;
+      Fmt.epr "CODE: %x\n%!" !code ;
+      next_code.(bits) <- (!code land 0xffff) ;
     done ;
 
     (* check that the bit counts in [bl_count] are consistent. The last code
        must be all ones. *)
+    Fmt.epr "!code:%d + bl_count.(_max_bits):%d - 1 = (1 lsl _max_bits) - 1:%x.\n%!"
+      !code bl_count.(_max_bits) ((1 lsl _max_bits) - 1) ;
     assert (!code + bl_count.(_max_bits) - 1 = (1 lsl _max_bits) - 1);
 
     for n = 0 to max_code
@@ -1276,14 +1347,14 @@ module T = struct
       tree_lengths.(n) <- bits ;
 
       if n <= max_code (* XXX(dinosaure): it's a leaf. *)
-      then ( bl_count.(bits) <- bl_count.(bits) + 1 )
+      then ( Fmt.epr "Update bl_count for node %3d (max_code: %3d) (bits:%3x).\n%!" n max_code bits ; bl_count.(bits) <- bl_count.(bits) + 1 )
     done ;
 
-    if !overflow > 0 (* This happends for example on obj2 and pic of the Calgary corpus. *)
+    if !overflow != 0 (* This happends for example on obj2 and pic of the Calgary corpus. *)
     then
       ( let rec go () =
           let bits = ref (max_length - 1) in
-          while bl_count.(!bits) = 0 do decr bits done ;
+          while bl_count.(!bits) == 0 do decr bits done ;
           bl_count.(!bits) <- bl_count.(!bits) - 1 ;
           bl_count.(!bits + 1) <- bl_count.(!bits + 1) + 2 ;
           bl_count.(max_length) <- bl_count.(max_length) - 1 ;
@@ -1292,6 +1363,7 @@ module T = struct
 
           if !overflow > 0 then go () in
 
+        Fmt.epr "OVERFLOW.\n%!" ;
         go () ;
 
         let h = ref (_heap_size - 1) in
@@ -1325,7 +1397,7 @@ module T = struct
     let tree_dads = Array.make _heap_size 0 in
     let tree_lengths = Array.make _heap_size 0 in
 
-    let max_code = Heap.populate ~freqs ~depth tree_lengths heap in
+    let max_code = Heap.populate ~length ~freqs ~depth tree_lengths heap in
     let max_code = Heap.pkzip max_code ~freqs ~depth heap in
 
     for n = heap.len / 2 downto 1 do Heap.pqdownheap ~freqs ~depth heap n done ;
@@ -1598,6 +1670,9 @@ module N = struct
   type literals = int array
   type distances = int array
 
+  let pp_literals = Fmt.(Dump.array int)
+  let pp_distances = Fmt.(Dump.array int)
+
   let make_literals () =
     let res = Array.make (2 * _l_codes + 1) 0 in
     res.(256) <- 1 ; res
@@ -1794,7 +1869,13 @@ module N = struct
     let k3 e = c_bits (dynamic.h_dst - 1) 5 k4 e in
     let k2 e = c_bits (dynamic.h_lit - 257) 5 k3 e in
     let k1 e = c_bits 0x2 2 k2 e in
-    let k0 e = c_bits 1 (if last then 1 else 0) k1 e in
+    let k0 e = c_bits (if last then 1 else 0) 1 k1 e in
+
+    k0 e
+
+  let encode_fixed_header last k e =
+    let k1 e = c_bits 0x1 2 k e in
+    let k0 e = c_bits (if last then 1 else 0) 1 k1 e in
 
     k0 e
 
@@ -1817,6 +1898,11 @@ module N = struct
             c_byte (e.hold land 0xff) k e )
     else k e
 
+  let pp_code ppf = function
+    | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
+    | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d len:%d)" off len
+    | `End -> Fmt.string ppf "`End"
+
   let rec block e = function
     | `Await ->
       e.k <- block ; `Ok
@@ -1826,6 +1912,7 @@ module N = struct
     | `Block block ->
       let k e v = match block.kind with
         | Dynamic dynamic -> encode_dynamic_header block.last dynamic (fun e -> e.k <- encode ; e.k e v) e
+        | Fixed -> encode_fixed_header e.blk.last (fun e -> e.k <- encode ; e.k e v) e
         | _ -> assert false in
       e.blk <- block ; e.k <- k ; `Ok
     | (`Literal _ | `Copy _ | `End) as v ->
@@ -1833,7 +1920,8 @@ module N = struct
 
       match e.blk.kind with
       | Dynamic dynamic -> encode_dynamic_header e.blk.last dynamic (fun e -> e.k <- encode ; e.k e v) e
-      | _ -> assert false
+      | Fixed -> encode_fixed_header e.blk.last (fun e -> e.k <- encode ; e.k e v) e
+      | _ -> assert false (* TODO *)
 
   and write k e =
     let o_pos = ref e.o_pos in
@@ -1850,34 +1938,42 @@ module N = struct
            ; bits := !bits - 16
            ; o_pos := !o_pos + 2 ) in
 
+    let ltree, dtree = match e.blk with
+      | { kind= Dynamic dynamic; _ } ->
+        dynamic.ltree.T.tree, dynamic.dtree.T.tree
+      | { kind= Fixed; _ } ->
+        _static_ltree, _static_dtree
+      | _ -> assert false in
+
     try while e.o_max - !o_pos + 1 > 1 && not (B.is_empty e.b) do
         let cmd = B.peek_exn e.b in
 
         if not (exists (B.code cmd) e.blk)
-        then raise_notrace End
-        else B.unsafe_junk e.b ;
+        then raise_notrace End ;
 
-        match cmd land 0x2000000 == 0, e.blk with
-        | true, { kind= Dynamic dynamic; _ } ->
+        B.unsafe_junk e.b ;
+
+        match cmd land 0x2000000 == 0 with
+        | true ->
           Fmt.epr "<<< literal %3d.\n%!" cmd ;
 
-          let len, v = Lookup.get dynamic.ltree.T.tree cmd in
+          let len, v = Lookup.get ltree cmd in
           hold := (v lsl !bits) lor !hold ;
           bits := !bits + len ;
           emit e
-        | false, { kind= Dynamic dynamic; _ } ->
+        | false ->
           let off, len = cmd land 0xffff, (cmd lsr 16) land 0x1ff in
 
           Fmt.epr "<<< copy off:%d, len:%d.\n%!" (off + 1) (len + 3);
 
           let code = _length.(len) in
-          let len0, v0 = Lookup.get dynamic.ltree.T.tree (code + 256 + 1) in
+          let len0, v0 = Lookup.get ltree (code + 256 + 1) in
           (* len0_max: 15 *)
           let len1, v1 = _extra_lbits.(code), len - _base_length.(code)  in
           (* len1_max: 5 *)
 
           let code = _distance off in
-          let len2, v2 = Lookup.get dynamic.dtree.T.tree code in
+          let len2, v2 = Lookup.get dtree code in
           (* len2_max: 15 *)
           let len3, v3 = _extra_dbits.(code), off - _base_dist.(code) in
           (* len3_max: 13 *)
@@ -1891,7 +1987,6 @@ module N = struct
           bits := !bits + len0 + len1 + len2 + len3 ;
           (* len_max: 48 *)
           emit e
-        | _, _ -> assert false (* TODO *)
       done ;
 
       Fmt.epr "leave hot-loop [o_rem: %d], [queue is empty: %b].\n%!"
@@ -1915,7 +2010,8 @@ module N = struct
         e.bits <- !bits ;
         e.o_pos <- !o_pos ;
 
-        let k e = e.k <- if e.blk.last then nothing else block ; `End in
+        let k = if e.blk.last then nothing else block in
+        let k e = e.k <- k ; `End in
         if e.blk.last then pending_bits k e else k e
       | _ -> assert false (* TODO *)
 
@@ -1966,6 +2062,7 @@ module N = struct
       | `Channel _ -> bigstring_create io_buffer_size, 0, io_buffer_size - 1 in
     let k e v = match block.kind with
       | Dynamic dynamic -> encode_dynamic_header block.last dynamic (fun e -> e.k <- encode ; e.k e v) e
+      | Fixed -> encode_fixed_header block.last (fun e -> e.k <- encode ; e.k e v) e
       | _ -> assert false in
     { dst
     ; blk= block
@@ -2028,8 +2125,19 @@ module W = struct
   (* XXX(dinosaure): [unsafe_] means that [i] can be out of [r] and [w] - but
      still is a valid index in [raw]. *)
   let unsafe_get_char t i = unsafe_get_char t.raw (mask i) [@@inline always]
-  let unsafe_get_uint8 t i = unsafe_get_uint8 t.raw (mask i) [@@inline always]
-  let unsafe_get_uint16 t i = unsafe_get_uint16 t.raw (mask i) [@@inline always]
+
+  let m = (1 lsl 15) - 1
+
+  let unsafe_get_uint16 t i =
+    if (mask i) == m
+    then
+      if Sys.big_endian
+      then (unsafe_get_uint8 t.raw 0 lsl 8) lor unsafe_get_uint8 t.raw m
+      else (unsafe_get_uint8 t.raw m lsl 8) lor unsafe_get_uint8 t.raw 0
+    else unsafe_get_uint16 t.raw (mask i) [@@inline always]
+
+  let unsafe_get_uint8 t i =
+    unsafe_get_uint8 t.raw (mask i) [@@inline always]
 
   let e t r s =
     let r = mask r in
@@ -2096,19 +2204,6 @@ module L = struct
     s.i_pos <- 0 ;
     s.i_len <- min_int
 
-  let refill k s = match s.src with
-    | `String _ ->
-      eoi s ; k s
-    | `Channel _ -> assert false (* TODO *)
-    | `Manual ->
-      s.k <- k ; `Await
-
-  let flush k s = s.k <- k ; `Flush
-
-  (* remaining bytes to read [s.i]. *)
-  let i_rem s = s.i_len - s.i_pos + 1
-  [@@inline]
-
   (* set [s.i] with [s]. *)
   let src d s j l =
     if (j < 0 || l < 0 || j + l > bigstring_length s)
@@ -2119,10 +2214,19 @@ module L = struct
       ; d.i_pos <- j
       ; d.i_len <- j + l - 1 )
 
-  let hash x c = ((x lsl _hash_shift) lxor (Char.code c)) land _hash_mask
-  [@@inline]
+  let refill k s = match s.src with
+    | `String _ ->
+      eoi s ; k s
+    | `Channel ic ->
+      let res = input_bigstring ic s.i 0 (Bigstringaf.length s.i) in
+      src s s.i 0 res ; k s
+    | `Manual ->
+      s.k <- k ; `Await
 
-  let lt a b = a - min_int < b - min_int
+  let flush k s = s.k <- k ; `Flush
+
+  (* remaining bytes to read [s.i]. *)
+  let i_rem s = s.i_len - s.i_pos + 1
   [@@inline]
 
   let pp_chr = Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
@@ -2137,6 +2241,7 @@ module L = struct
     let msk = W.mask s.w.r in
     let pre = W.max - msk in
     let rst = len - pre in
+
     if rst > 0
     then ( B.blit s.b s.w.raw msk pre
          ; B.blit s.b s.w.raw 0 rst )
@@ -2147,7 +2252,7 @@ module L = struct
 
     if W.is_empty s.w
     then ( W.tail s.w ; s.k <- nothing ; `End )
-    else ( s.k <- pending ; `Flush )
+    else flush pending s
 
   let rec fill s =
     let rem = i_rem s in
@@ -2156,8 +2261,7 @@ module L = struct
 
     if rem <= 0 then ( if rem < 0 then pending s else refill fill s )
     else
-      let len = min (W.available s.w - 2) rem in
-      Fmt.epr "fill window> len: %d.\n%!" len ;
+      let len = min (W.available s.w) rem in
       W.feed s.w s.i s.i_pos len ;
       s.i_pos <- s.i_pos + len ;
 
@@ -2165,7 +2269,8 @@ module L = struct
         if i_rem s == 0 then refill fill s
         else fill s in
 
-      if W.size s.w >= 2 then deffast k s else refill fill s
+      (* XXX(dinosaure): optimize this branch. TODO! *)
+      if W.size s.w >= 2 then ( if B.available s.b < 2 then flush fill s else deffast k s ) else refill fill s
 
   and deffast k s =
     assert (B.available s.b >= 2) ;
@@ -2191,7 +2296,7 @@ module L = struct
     while s.w.w - !i >= 3 && not (B.is_full s.b) do
       try
         if W.unsafe_get_uint8 s.w !i == W.unsafe_get_uint8 s.w (!i - 1)
-        && W.unsafe_get_uint16 s.w (!i - 1) == W.unsafe_get_uint16 s.w (!i + 1)
+           && W.unsafe_get_uint16 s.w (!i - 1) == W.unsafe_get_uint16 s.w (!i + 1)
         then ( Fmt.epr ">>> Record match (dst:1).\n%!" ; len := 3 ; dst := 1 ; raise_notrace Match ) ;
 
         let hash =
@@ -2202,9 +2307,6 @@ module L = struct
 
         dst := !i - source ; (* XXX(dinosaure): should be safe where [!i] is the newest indice in [w]. *)
         Fmt.epr ">>> try a match on dst:%d (source: %d).\n%!" !dst source ;
-        Fmt.epr ">>> w[%d]:%04x == w[%d]:%04x.\n%!"
-          !i (W.unsafe_get_uint16 s.w !i)
-          source (W.unsafe_get_uint16 s.w source) ;
 
         if !dst == 0 || !dst > (1 lsl 15) (* XXX(dinosaure): deliver only valid distance *)
           || source + 3 - min_int >= !i - min_int (* XXX(dinosaure): [source] ∈ no emitted characters *)
@@ -2267,7 +2369,7 @@ module L = struct
 
     if B.is_full s.b
     then flush k s
-    else if i_rem s < 0 then pending s else k s
+    else if i_rem s == 0 then refill fill s else k s
 
   let compress s = s.k s
 
@@ -2275,7 +2377,7 @@ module L = struct
     let i, i_pos, i_len = match src with
       | `Manual -> bigstring_empty, 1, 0
       | `String x -> bigstring_of_string x, 0, String.length x - 1
-      | `Channel _ -> assert false in
+      | `Channel _ -> bigstring_create io_buffer_size, 1, 0 in
     { src
     ; i
     ; i_pos
