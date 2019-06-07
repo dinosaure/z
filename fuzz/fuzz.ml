@@ -169,7 +169,7 @@ let () =
   let encoder = Z.N.encoder (`Buffer buf) { kind= Z.N.Dynamic dynamic; last= true; } ~q in
   List.iter (fun v -> match Z.N.encode encoder v with
       | `Ok -> ()
-      | `End _ -> Crowbar.fail "Impossible `End case"
+      | `End -> Crowbar.fail "Impossible `End case"
       | `Partial -> Crowbar.fail "Impossible `Partial case")
     ((cmds :> Z.N.encode list) @ [ `End ]) ;
   let bytes = Buffer.contents buf in
@@ -198,10 +198,11 @@ let non_empty_bytes n : string Crowbar.gen =
   range n >>= (gen <.> succ)
 
 let reconstruct lst =
-  let len = List.fold_left (fun a -> function `Literal _ -> 1 + a | `Copy (_, len) -> len + a) 0 lst in
+  let len = List.fold_left (fun a -> function `Literal _ -> 1 + a | `Copy (_, len) -> len + a | `End -> a) 0 lst in
   let res = Bytes.create len in
   let pos = ref 0 in
   List.iter (function
+      | `End -> ()
       | `Literal chr -> Bytes.set res !pos chr ; incr pos
       | `Copy (off, len) ->
         for _ = 0 to len - 1
@@ -212,6 +213,7 @@ let reconstruct lst =
 let pp_code ppf = function
   | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
   | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d len:%d)" off len
+  | `End -> Fmt.pf ppf "`End"
 
 let () =
   Crowbar.add_test ~name:"lz77" [ Crowbar.list (non_empty_bytes 1024) ] @@ fun inputs ->
