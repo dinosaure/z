@@ -1826,15 +1826,20 @@ module N = struct
   (* encode dynamic huffman tree *)
 
   let encode_huffman dynamic k e =
-    let rec flush e =
-      if e.bits >= 8
-      then
-        ( let k e =
-            e.hold <- e.hold lsr 8 ;
-            e.bits <- e.bits - 8 ;
-            flush e in
-          c_byte (e.hold land 0xff) k e )
-      else k e in
+    let flush e =
+      if e.bits >= 16
+      then ( let k e =
+                e.hold <- e.hold lsr 16 ;
+                e.bits <- e.bits - 16 ;
+                k e in
+              c_short (e.hold land 0xffff) k e )
+      else if e.bits >= 8
+      then ( let k e =
+                e.hold <- e.hold lsr 8 ;
+                e.bits <- e.bits - 8 ;
+                k e in
+              c_byte (e.hold land 0xff) k e )
+       else k e in
     let rec go rank e =
       if rank == Array.length dynamic.symbols
       then flush e
@@ -1873,6 +1878,7 @@ module N = struct
 
   let pending_bits k e =
     assert (e.bits <= 16) ;
+    let k = flush k in
 
     if e.bits > 8
     then ( let k e =
