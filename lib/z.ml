@@ -1901,32 +1901,29 @@ module N = struct
     | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d len:%d)" off len
     | `End -> Fmt.string ppf "`End"
 
-  let rec block e = function
-    | `Await ->
-      e.k <- block ; `Ok
-    | `Flush ->
-      let k e = e.k <- block ; `Ok in
-      flush k e
+  let rec block k e = function
     | `Block block ->
-      let k e v = match block.kind with
-        | Dynamic dynamic -> encode_dynamic_header block.last dynamic (fun e -> e.k <- encode ; e.k e v) e
-        | Fixed -> encode_fixed_header e.blk.last (fun e -> e.k <- encode ; e.k e v) e
+      let k e = match block.kind with
+        | Dynamic dynamic ->
+          encode_dynamic_header block.last dynamic (fun e -> e.k <- encode ; k e) e
+        | Fixed ->
+          encode_fixed_header block.last (fun e -> e.k <- encode ; k e) e
         | _ -> assert false in
-      e.blk <- block ; e.k <- k ; `Ok
-    | (`Literal _ | `Copy _ | `End) as v ->
-      assert (e.blk.last = false) ;
+      e.blk <- block ; k e
+    | (`Flush | `Await) as v -> encode e v (* TODO *)
 
-      match e.blk.kind with
-      | Dynamic dynamic -> encode_dynamic_header e.blk.last dynamic (fun e -> e.k <- encode ; e.k e v) e
-      | Fixed -> encode_fixed_header e.blk.last (fun e -> e.k <- encode ; e.k e v) e
-      | _ -> assert false (* TODO *)
+  and new_block k e = e.k <- block k ; `Block
 
-  and write k e =
+  and write e =
     let o_pos = ref e.o_pos in
     let hold = ref e.hold in
     let bits = ref e.bits in
 
+    let exception Leave in
     let exception End in
+
+    let k_ok e = e.k <- encode ; `Ok in
+    let k_nw e = e.k <- block write ; `Block in
 
     let emit e =
       if !bits >= 16
@@ -1946,13 +1943,17 @@ module N = struct
         let cmd = B.peek_exn e.b in
 
         if not (exists (B.code cmd) e.blk)
-        then raise_notrace End ;
+        then raise_notrace Leave ;
 
         B.unsafe_junk e.b ;
+
+        if cmd == 256
+        then raise_notrace End ;
 
         match cmd land 0x2000000 == 0 with
         | true ->
           let len, v = Lookup.get ltree cmd in
+
           hold := (v lsl !bits) lor !hold ;
           bits := !bits + len ;
           emit e
@@ -1987,57 +1988,106 @@ module N = struct
       e.o_pos <- !o_pos ;
 
       (* XXX(dinosaure): at least we need 2 bytes in any case. *)
-      if o_rem e > 1 then k e else flush k e
-    with End -> match e.blk with
-      | { kind= Dynamic dynamic; _ } ->
-        (* XXX(dinosaure): it's safe because we raise End only if [e.o_max - !o_pos + 1 > 1]. *)
-        let len, v = Lookup.get dynamic.ltree.T.tree 256 in
-        hold := (v lsl !bits) lor !hold ;
-        bits := !bits + len ;
-        emit e ;
+      if o_rem e > 1 then k_ok e else flush write e
+    with
+    | Leave ->
+      ( match e.blk with
+        | { kind= Dynamic dynamic; _ } ->
+          let len, v = Lookup.get dynamic.ltree.T.tree 256 in
+          hold := (v lsl !bits) lor !hold ;
+          bits := !bits + len ;
+          emit e ;
 
-        e.hold <- !hold ;
-        e.bits <- !bits ;
-        e.o_pos <- !o_pos ;
+          e.hold <- !hold ;
+          e.bits <- !bits ;
+          e.o_pos <- !o_pos ;
 
-        let k = if e.blk.last then nothing else block in
-        let k e = e.k <- k ; `End in
-        if e.blk.last then pending_bits k e else k e
-      | _ -> assert false (* TODO *)
+          if e.blk.last then assert false else k_nw e
+        | { kind= Fixed; _ } ->
+          let len, v = Lookup.get _static_ltree 256 in
+          hold := (v lsl !bits) lor !hold ;
+          bits := !bits + len ;
+          emit e ;
 
-  and encode_end k e =
-    let rec pending_cmds e =
-      if B.is_empty e.b then ( if e.blk.last then pending_bits k e else k e ) else write pending_cmds e
-    and push_end e =
-      if B.full e.b then write push_end e
-      else ( B.push_exn e.b 256 ; pending_cmds e ) in
-    push_end e
+          e.hold <- !hold ;
+          e.bits <- !bits ;
+          e.o_pos <- !o_pos ;
 
-  and encode_cmd cmd k e =
-    let rec push_cmd e =
-      if B.full e.b then write push_cmd e
-      else ( B.push_exn e.b cmd ; k e ) in
-    push_cmd e
+          if e.blk.last then assert false else k_nw e
+        | _ -> assert false )
+    | End ->
+      ( match e.blk with
+        | { kind= Dynamic dynamic; _ } ->
+          let len, v = Lookup.get dynamic.ltree.T.tree 256 in
+          hold := (v lsl !bits) lor !hold ;
+          bits := !bits + len ;
+          emit e ;
+
+          e.hold <- !hold ;
+          e.bits <- !bits ;
+          e.o_pos <- !o_pos ;
+
+          if e.blk.last then pending_bits k_ok e else k_ok e
+        | { kind= Fixed; _ } ->
+          let len, v = Lookup.get _static_ltree 256 in
+          hold := (v lsl !bits) lor !hold ;
+          bits := !bits + len ;
+          emit e ;
+
+          e.hold <- !hold ;
+          e.bits <- !bits ;
+          e.o_pos <- !o_pos ;
+
+          if e.blk.last then pending_bits k_ok e else k_ok e
+        | _ -> assert false )
+
+  and force blk e =
+    let emit e =
+      if e.bits >= 16
+      then ( unsafe_set_uint16 e.o e.o_pos e.hold
+           ; e.hold <- e.hold lsr 16
+           ; e.bits <- e.bits - 16
+           ; e.o_pos <- e.o_pos + 2 ) in
+
+    match e.blk with
+    | { kind= Dynamic dynamic; _ } ->
+      let len, v = Lookup.get dynamic.ltree.T.tree 256 in
+      e.hold <- (v lsl e.bits) lor e.hold ;
+      e.bits <- e.bits + len ;
+      emit e ;
+
+      block write e (`Block blk)
+    | { kind= Fixed; _ } ->
+      let len, v = Lookup.get _static_ltree 256 in
+      e.hold <- (v lsl e.bits) lor e.hold ;
+      e.bits <- e.bits + len ;
+      emit e ;
+
+      block write e (`Block blk)
+    | _ -> assert false
 
   and encode e = function
-    | #code as v ->
-      let k e = e.k <- encode ; `Ok in
-      encode_cmd (B.cmd v) k e
     | `Await -> e.k <- encode ; `Ok (* XXX(dinosaure): do nothing. *)
-    | `Flush ->
-      let k e = e.k <- encode ; `Ok in
-      let rec encode_cmds e =
-        if B.is_empty e.b then k e else write encode_cmds e in
-      encode_cmds e
-    | `End ->
-      let k e = e.k <- if e.blk.last then nothing else block ; `Ok in
-      encode_end (fun e -> flush k e) e
-    | `Block _ as v ->
+    | `Flush -> write e
+    | `Block block ->
       if e.blk.last
-      then Fmt.invalid_arg "Impossible to make a new block when the current block is the last one"
-      else
-        let k e = block e v in
-        encode_end (fun e -> flush k e) e
+      then Fmt.invalid_arg "Impossible to make a new block when the current block is the last one" ;
+
+      if o_rem e > 1
+      then force block e
+      else flush (fun e -> force block e) e
+
+  let first_entry e = function
+    | `Block blk ->
+      e.k <- encode ;
+      block (fun e -> e.k <- encode ; write e) e (`Block blk)
+    | (`Flush | `Await) as v ->
+      match e.blk.kind with
+      | Dynamic dynamic ->
+        encode_dynamic_header e.blk.last dynamic (fun e -> e.k <- encode ; encode e v) e
+      | Fixed ->
+        encode_fixed_header e.blk.last (fun e -> e.k <- encode ; encode e v) e
+      | _ -> assert false
 
   let dst_rem = o_rem
 
@@ -2045,17 +2095,13 @@ module N = struct
     | `Rem rem -> rem
     | `Pending -> Fmt.invalid_arg "Encoder does not reach EOB of last block"
 
-  let encoder dst block ~q =
+  let encoder dst ~q =
     let o, o_pos, o_max = match dst with
       | `Manual -> bigstring_empty, 1, 0
       | `Buffer _
       | `Channel _ -> bigstring_create io_buffer_size, 0, io_buffer_size - 1 in
-    let k e v = match block.kind with
-      | Dynamic dynamic -> encode_dynamic_header block.last dynamic (fun e -> e.k <- encode ; e.k e v) e
-      | Fixed -> encode_fixed_header block.last (fun e -> e.k <- encode ; e.k e v) e
-      | _ -> assert false in
     { dst
-    ; blk= block
+    ; blk= { kind= Fixed; last= false; }
     ; hold= 0
     ; bits= 0
     ; bits_rem= `Pending
@@ -2063,7 +2109,7 @@ module N = struct
     ; o_pos
     ; o_max
     ; b= q
-    ; k }
+    ; k= first_entry }
 
   let encode e = e.k e
 end
