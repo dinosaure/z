@@ -49,15 +49,15 @@ let decode =
 
 let encode ~block:kind lst =
   let res = Buffer.create 16 in
-  Z.B.reset q ; (* XXX(dinosaure): we did not share [q] with something else,
-                   safe to reset it! *)
-  let encoder = Z.N.encoder (`Buffer res) { kind; last= true; } ~q in
-  List.iter (fun v -> match Z.N.encode encoder v with
-      | `Ok -> ()
-      | `Partial -> Alcotest.fail "Impossible `Partial case"
-      | `End -> Alcotest.fail "Impossible `End case")
-    lst ;
-  Buffer.contents res
+  let q = Z.B.of_list lst in
+  let encoder = Z.N.encoder (`Buffer res) ~q in
+  match Z.N.encode encoder (`Block { kind; last= true; }) with
+  | `Block -> assert false
+  | `Partial -> assert false
+  | `Ok -> match Z.N.encode encoder `Flush with
+    | `Ok -> Buffer.contents res
+    | `Block -> Alcotest.fail "Bad block"
+    | `Partial -> assert false
 
 let encode_dynamic lst =
   let literals = Z.N.make_literals () in
@@ -458,7 +458,13 @@ let fuzz15 () =
 
 let fuzz16 () =
   Alcotest.test_case "fuzz16" `Quick @@ fun () ->
-  let lst = [ `Literal '@'; `Copy (1, 212); `Copy (129, 258); `Copy (7, 131); `Copy (527, 208); `Copy (129, 258); `End ] in
+  let lst = [ `Literal '@'
+            ; `Copy (1, 212)
+            ; `Copy (129, 258)
+            ; `Copy (7, 131)
+            ; `Copy (527, 208)
+            ; `Copy (129, 258)
+            ; `End ] in
   let res = encode_dynamic lst in
   Fmt.epr "> %S.\n%!" res ;
   let decoder = Z.M.decoder (`String res) ~o ~w in
@@ -617,6 +623,226 @@ let hang0 () =
   let _ = unroll_inflate decoder in
   ()
 
+let ( <.> ) f g = fun x -> f (g x)
+
+let dynamic_and_fixed () =
+  Alcotest.test_case "dynamic+fixed" `Quick @@ fun () ->
+  let res = Buffer.create 16 in
+  let literals = Z.N.make_literals () in
+  let distances = Z.N.make_distances () in
+  Z.B.reset q ;
+  List.iter (Z.B.push_exn q <.> Z.B.cmd) [ `Literal 'a'; `Copy (1, 3) ] ;
+  Z.N.succ_literal literals 'a' ;
+  Z.N.succ_length literals 3 ;
+  Z.N.succ_distance distances 1 ;
+  let dynamic_a = Z.N.dynamic_of_frequencies ~literals ~distances in
+  let encoder = Z.N.encoder (`Buffer res) ~q in
+  let rec go = function
+    | [] -> ()
+    | `Fill lst :: r ->
+      Alcotest.(check bool) "empty queue" (Z.B.is_empty q) true ;
+      List.iter (Z.B.push_exn q <.> Z.B.cmd) lst ; go r
+    | #Z.N.encode as x :: r -> match Z.N.encode encoder x with
+      | `Partial -> Alcotest.fail "Impossible `Partial case"
+      | `Block -> Alcotest.fail "Impossible `Block case"
+      | `Ok -> go r in
+  go [ `Block { Z.N.kind= Z.N.Dynamic dynamic_a; Z.N.last= false; }
+     ; `Flush
+     ; `Fill [ `Literal 'b'; `Copy (1, 3); `End ]
+     ; `Block { Z.N.kind= Z.N.Fixed; Z.N.last= true; }
+     ; `Flush ] ;
+  let decoder = Z.M.decoder (`String (Buffer.contents res)) ~w ~o in
+  let res = unroll_inflate decoder in
+  Alcotest.(check str) "result" res "aaaabbbb"
+
+let fixed_and_dynamic () =
+  Alcotest.test_case "fixed+dynamic" `Quick @@ fun () ->
+  let res = Buffer.create 16 in
+  let literals = Z.N.make_literals () in
+  let distances = Z.N.make_distances () in
+  Z.B.reset q ;
+  List.iter (Z.B.push_exn q <.> Z.B.cmd) [ `Literal 'a'; `Copy (1, 3) ] ;
+  Z.N.succ_literal literals 'b' ;
+  Z.N.succ_length literals 3 ;
+  Z.N.succ_distance distances 1 ;
+  let dynamic_b = Z.N.dynamic_of_frequencies ~literals ~distances in
+  let encoder = Z.N.encoder (`Buffer res) ~q in
+  let rec go = function
+    | [] -> ()
+    | `Fill lst :: r ->
+      Alcotest.(check bool) "empty queue" (Z.B.is_empty q) true ;
+      List.iter (Z.B.push_exn q <.> Z.B.cmd) lst ; go r
+    | #Z.N.encode as x :: r -> match Z.N.encode encoder x with
+      | `Partial -> Alcotest.fail "Impossible `Partial case"
+      | `Block -> Alcotest.fail "Impossible `Block case"
+      | `Ok -> go r in
+  go [ `Flush
+     ; `Block { Z.N.kind= Z.N.Dynamic dynamic_b; last= true; }
+     ; `Fill [ `Literal 'b'; `Copy (1, 3); `End ]
+     ; `Flush ] ;
+  Fmt.epr "> %S.\n%!" (Buffer.contents res) ;
+  let decoder = Z.M.decoder (`String (Buffer.contents res)) ~w ~o in
+  let res = unroll_inflate decoder in
+  Alcotest.(check str) "result" res "aaaabbbb"
+
+let dynamic_and_dynamic () =
+  Alcotest.test_case "dynamic+dynamic" `Quick @@ fun () ->
+  let res = Buffer.create 16 in
+  let literals = Z.N.make_literals () in
+  let distances = Z.N.make_distances () in
+  Z.B.reset q ;
+  List.iter (Z.B.push_exn q <.> Z.B.cmd) [ `Literal 'a'; `Copy (1, 3); `Literal 'b'; `Copy (1, 3); `End ] ;
+
+  Z.N.succ_literal literals 'a' ;
+  Z.N.succ_length literals 3 ;
+  Z.N.succ_distance distances 1 ;
+  let dynamic_a = Z.N.dynamic_of_frequencies ~literals ~distances in
+  Z.N.succ_literal literals 'b' ;
+  Z.N.succ_length literals 3 ;
+  Z.N.succ_distance distances 1 ;
+  let dynamic_b = Z.N.dynamic_of_frequencies ~literals ~distances in
+
+  let encoder = Z.N.encoder (`Buffer res) ~q in
+  let rec go = function
+    | [] -> ()
+    | x :: `Block block :: r ->
+      ( match Z.N.encode encoder x with
+        | `Partial -> Alcotest.fail "Impossible `Partial case"
+        | `Block -> go ((`Block block) :: r)
+        | `Ok -> Alcotest.fail "Unexpected `Ok case" )
+    | x :: r -> match Z.N.encode encoder x with
+      | `Ok -> go r
+      | `Partial -> Alcotest.fail "Impossible `Partial case"
+      | `Block -> Alcotest.fail "Impossible `Block case" in
+  go [ `Block { Z.N.kind= Z.N.Dynamic dynamic_a; Z.N.last= false; }
+     ; `Block { Z.N.kind= Z.N.Dynamic dynamic_b; Z.N.last= true; }
+     ; `Flush ] ;
+
+  Fmt.epr "> %S.\n%!" (Buffer.contents res) ;
+  let decoder = Z.M.decoder (`String (Buffer.contents res)) ~w ~o in
+  let res = unroll_inflate decoder in
+  Alcotest.(check str) "result" res "aaaabbbb"
+
+let load_file ln path =
+  let ic = open_in path in
+  let rs = Bytes.create ln in
+  really_input ic rs 0 ln ;
+  close_in ic ; Bytes.unsafe_to_string rs
+
+let partial_reconstruct tmp lst =
+  let len = List.fold_left (fun a -> function `Literal _ -> 1 + a | `Copy (_, len) -> len + a | `End -> a) 0 lst in
+  let res = Bytes.create (String.length tmp + len) in
+  Bytes.blit_string tmp 0 res 0 (String.length tmp) ;
+  let pos = ref (String.length tmp) in
+  List.iter (function
+      | `Literal chr -> Bytes.set res !pos chr ; incr pos
+      | `Copy (off, len) ->
+        for _ = 0 to len - 1
+        do Bytes.set res !pos (Bytes.get res (!pos - off)) ; incr pos done
+      | `End -> () (* XXX(dinosaure): should be the last *))
+    lst ;
+  Bytes.unsafe_to_string res
+
+let lz77_corpus_rfc5322 () =
+  Alcotest.test_case "rfc5322" `Quick @@ fun () ->
+  let ic = open_in "corpus/rfc5322.txt" in
+  Z.B.reset q ;
+  let state = Z.L.state (`Channel ic) ~w ~q in
+  let res = ref "" in
+  let rec go () = match Z.L.compress state with
+    | `Flush ->
+      Alcotest.(check bool) "available q < 2" (Z.B.available q < 2) true ;
+      Fmt.epr "Cursor at: %d.\n%!" (String.length !res) ;
+      let old = String.length !res in
+      res := partial_reconstruct !res (Z.B.to_list q) ;
+      Fmt.epr "Commands: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) (Z.B.to_list q) ;
+      Fmt.epr "Cursor at: %d (%d).\n%!" (String.length !res) (String.length !res - old) ;
+      Alcotest.(check str) "rfc5322.txt" (load_file (String.length !res) "corpus/rfc5322.txt") !res ;
+      Z.B.reset q ; go ()
+    | `Await -> Alcotest.fail "Impossible `Await case"
+    | `End ->
+      res := partial_reconstruct !res (Z.B.to_list q) ;
+      Alcotest.(check str) "rfc5322.txt" (load_file (String.length !res) "corpus/rfc5322.txt") !res ;
+      close_in ic in
+  go ()
+
+let _max_bits = 15
+let _literals = 256
+let _length_codes = 29
+let _l_codes = _literals + 1 + _length_codes
+
+let tree_0 () =
+  Alcotest.test_case "empty literals/lengths freqs" `Quick @@ fun () ->
+  let literals = Z.N.make_literals () in
+  let literals = Z.N.unsafe_literals_to_array literals in
+  let bl_count = Array.make (_max_bits + 1) 0 in
+  let tree = Z.T.make ~length:_l_codes literals ~bl_count in
+  let lengths = ref [] in
+  let codes = ref [] in
+  Array.iteri (fun n -> function
+      | 0 -> ()
+      | l -> lengths := (n, l) :: !lengths ;
+        let l', c = Z.Lookup.get tree.Z.T.tree n in
+        Alcotest.(check int) "check length" l l' ;
+        codes := (n, c) :: !codes )
+    tree.Z.T.lengths ;
+  let lengths = List.sort (fun (a, _) (b, _) -> a - b) !lengths in
+  let codes = List.sort (fun (a, _) (b, _) -> a - b) !codes in
+  Alcotest.(check (list (pair int int)))
+    "lengths" lengths [ (0, 1); (256, 1) ] ;
+  Alcotest.(check (list (pair int int)))
+    "codes" codes [ (0, 0); (256, 1) ]
+
+let tree_rfc5322_corpus () =
+  Alcotest.test_case "rfc5322 corpus literals/lengths freqs" `Quick @@ fun () ->
+  (* XXX(dinosaure): this is a dump of [literals] when we compute [rfc5322.txt].
+     Values are close to LZ77 algorithm/implementation and it's why I dumped it.
+     This test want to check if we generate the same literals/lengths tree than [zlib]. *)
+  let literals =
+    [|     0;    0;    0;    0;    0;    0;     0;    0;      0;    0;  236;   0;  27;   0;    0;  0;   0; 0;
+           0;    0;    0;    0;    0;    0;     0;    0;      0;    0;    0;   0;   0;   0; 5446;  1; 311; 1;
+           1;   10;    1;    7;  127;  128;    30;   11;    273;  175; 1180;  73;  67; 111;
+         169;  137;   60;   66;   45;   26;    41;   37;     57;   32;    6;  44;   6;   1;    7;
+          96;   21;  115;   61;   32;  127;     9;   45;    108;    3;    2;  66;  66;  46;   81;
+          31;    7;  104;  169;  118;   60;     3;   49;      1;    5;    0;  54;   9;  74;    1;  1;
+           1; 2126;  318; 1060; 1119; 3330;   666;  377;    800; 2005;    9;  81;
+         970;  729; 1808; 1802;  615;   40;  1612; 1991;   2201;  537;  158;
+         251;  127;  389;   12;    1;   62;     1;    1;      0;    0;    0;   0;   0;   0;    0;  0;   0;
+           0;    0;    0;    0;    0;    0;     0;    0;      0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;    0;      0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;    0;      0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;    0;      0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;    0;      0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;    0;      0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     1;  1594;  1153;  698;  345; 326; 229; 150;
+         107;  172;  111;   97;   23;  100;    44;    24;    10;   20;   14;   3;   7;  17;
+           1;    1;    1;    0;    0;    0;     0;     0;     2;    2;    2;   2;   2;   2;    2;  2;   3; 4; 4;
+           4;    5;    6;    7;    8;    9;    10;    13;    14;   14;   15;  18;  18;  20;   23; 27;
+          28;   31;   35;   37;   39;   47;    48;    55;    57;   59;   66;  73;  75;  77;   80;
+          82;   90;   95;  103;  110;  115;   119;   124;   128;  132;  140; 144;
+         152;  162;  180;  183;  190;  196;   204;   212;   219;  230;  239; 241;
+         252;  263;  278;  284;  300;  311;   324;   363;   384;  400;  425; 444;
+         469;  485;  515;  559;  565;  591;   619;   655;   711;  784;  869; 954;
+        1000; 1109; 1145; 1210; 1279; 1366;  1510;  1740;  1922; 1972;
+        2121; 2298; 2489; 2773; 2936; 3206;  3519;  3702;  3886; 4093;
+        4787; 5709; 6198; 7221; 7979; 9758; 11907; 15200; 21665;
+       36865;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
+           0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; |] in
+  Alcotest.(check int) "length of freqs" (2 * _l_codes + 1) (Array.length literals) ;
+  let bl_count = Array.make (_max_bits + 1) 0 in
+  let ltree = Z.T.make ~length:_l_codes literals ~bl_count in
+  let len_6, code_6 = Z.Lookup.get ltree.Z.T.tree (Char.code '6') in
+  let len_eob, code_eob = Z.Lookup.get ltree.Z.T.tree 256 in
+  Alcotest.(check (pair int int)) "literal 6" (10, 0x35f) (len_6, code_6) ;
+  Alcotest.(check (pair int int)) "eob" (15, 0x6fff) (len_eob, code_eob)
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -634,7 +860,10 @@ let () =
                 ; length_extra ()
                 ; long_distance_and_extra ()
                 ; window_end ()
-                ; huffman_length_extra () ]
+                ; huffman_length_extra ()
+                ; dynamic_and_fixed ()
+                ; fixed_and_dynamic ()
+                ; dynamic_and_dynamic () ]
     ; "fuzz", [ fuzz0 ()
               ; fuzz1 ()
               ; fuzz2 ()
@@ -654,9 +883,12 @@ let () =
               ; fuzz16 ()
               ; fuzz17 ()
               ; fuzz18 () ]
+    ; "huffman", [ tree_0 ()
+                 ; tree_rfc5322_corpus () ]
     ; "lz77", [ lz77_0 ()
               ; lz77_1 ()
               ; lz77_2 ()
               ; lz77_3 ()
-              ; lz77_4 () ]
+              ; lz77_4 ()
+              ; lz77_corpus_rfc5322 () ]
     ; "hang", [ hang0 () ] ]
