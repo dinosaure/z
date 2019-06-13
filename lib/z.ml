@@ -394,11 +394,11 @@ module Window = struct
     let msk = mask t.w in
     let pre = max - msk in
     let rst = len - pre in
-    if rst > 0
-    then ( unsafe_blit buf off t.raw msk pre
-         ; update t
-         ; unsafe_blit buf (off + pre) t.raw 0 rst )
-    else unsafe_blit buf off t.raw msk len ;
+    ( if rst > 0
+      then ( unsafe_blit buf off t.raw msk pre
+           ; update t
+           ; unsafe_blit buf (off + pre) t.raw 0 rst )
+      else unsafe_blit buf off t.raw msk len ) ;
     t.w <- t.w + len
 
   let checksum w = w.c
