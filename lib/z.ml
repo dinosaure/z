@@ -1453,8 +1453,8 @@ module T = struct
         then raise_notrace Continue
         else if !count < !min_count
         then bl_freqs.(!curlen) <- bl_freqs.(!curlen) + !count
-        else if !curlen <> 0
-        then ( if !curlen <> !prevlen then bl_freqs.(!curlen) <- bl_freqs.(!curlen) + 1
+        else if !curlen != 0
+        then ( if !curlen != !prevlen then bl_freqs.(!curlen) <- bl_freqs.(!curlen) + 1
              ; bl_freqs.(_rep_3_6) <- bl_freqs.(_rep_3_6) + 1 )
         else if !count <= 10
         then bl_freqs.(_repz_3_10) <- bl_freqs.(_repz_3_10) + 1
@@ -1463,7 +1463,7 @@ module T = struct
         count := 0 ;
         prevlen := !curlen ;
 
-        if !nextlen = 0
+        if !nextlen == 0
         then ( max_count := 138 ; min_count := 3 )
         else if !curlen = !nextlen
         then ( max_count := 6 ; min_count := 3 )
@@ -1496,7 +1496,7 @@ module T = struct
       incr count ;
 
       try
-        if !count < !max_count && !curlen = !nextlen
+        if !count < !max_count && !curlen == !nextlen
         then raise_notrace Continue
         else if !count < !min_count
         then while bl_symbols.(!i) <- code !curlen bltree.tree ; incr i ; decr count ; !count != 0 do () done
