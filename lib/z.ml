@@ -1665,6 +1665,8 @@ module N = struct
 
   let pp_literals = Fmt.(Dump.array int)
   let pp_distances = Fmt.(Dump.array int)
+  external unsafe_literals_to_array : literals -> int array = "%identity"
+  external unsafe_distances_to_array : distances -> int array = "%identity"
 
   let make_literals () =
     let res = Array.make (2 * _l_codes + 1) 0 in
