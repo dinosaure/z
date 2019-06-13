@@ -155,23 +155,27 @@ let pp_cmd ppf = function
   | `Literal chr -> Fmt.pf ppf "(`Literal %a)" pp_chr chr
   | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d, len:%d)" off len
 
+type cmd = [ `Literal of char | `Copy of int * int | `End ]
+
 let () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.list gen_cmd ] @@ fun cmds ->
   if not (check_cmds cmds) then Crowbar.bad_test () ;
   Z.B.reset q ;
 
   Fmt.epr "deflated: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) cmds ;
+  List.iter (Z.B.push_exn q <.> Z.B.cmd) (cmds :> cmd list) ;
+  Z.B.push_exn q Z.B.eob ;
 
   let expected = apply_cmds cmds in
   let buf = Buffer.create 16 in
   let literals, distances = frequencies_of_cmds cmds in
   let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
-  let encoder = Z.N.encoder (`Buffer buf) { kind= Z.N.Dynamic dynamic; last= true; } ~q in
+  let encoder = Z.N.encoder (`Buffer buf) ~q in
   List.iter (fun v -> match Z.N.encode encoder v with
       | `Ok -> ()
-      | `End -> Crowbar.fail "Impossible `End case"
+      | `Block -> Crowbar.fail "Impossible `Block case"
       | `Partial -> Crowbar.fail "Impossible `Partial case")
-    ((cmds :> Z.N.encode list) @ [ `End ]) ;
+    [ `Block { Z.N.kind= Z.N.Dynamic dynamic; last= true; }; `Flush ] ;
   let bytes = Buffer.contents buf in
   let res0 = zlib bytes in
   let res1 = z bytes in
