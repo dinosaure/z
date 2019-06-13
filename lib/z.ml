@@ -2250,7 +2250,11 @@ module L = struct
         else fill s in
 
       (* XXX(dinosaure): optimize this branch. TODO! *)
-      if W.size s.w >= 2 then ( if B.available s.b < 2 then flush fill s else deffast k s ) else refill fill s
+      if W.size s.w >= 2
+      then ( if B.available s.b < 2
+             then flush fill s
+             else deffast k s )
+      else refill fill s
 
   and deffast k s =
     assert (B.available s.b >= 2) ;
