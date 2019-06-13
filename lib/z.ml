@@ -1736,12 +1736,13 @@ module N = struct
   type encode = [ `Await | `Flush | `Block of block ]
 
   let exists v block = match v, block.kind with
-    | (`Copy _ | `End), Flat _ -> Fmt.invalid_arg "copy code in flat block can not exist"
+    | (`Copy _ | `End), Flat _ ->
+      Fmt.invalid_arg "copy code in flat block can not exist"
     | `Literal chr, Dynamic dynamic ->
-      dynamic.ltree.T.lengths.(Char.code chr) > 0
+      dynamic.ltree.T.tree.Lookup.t.(Char.code chr) lsr _max_bits > 0
     | `Copy (off, len), Dynamic dynamic ->
-      dynamic.ltree.T.lengths.(256 + 1 + _length.(len - 3)) > 0
-      && dynamic.dtree.T.lengths.(_distance (pred off)) > 0
+      dynamic.ltree.T.tree.Lookup.t.(256 + 1 + _length.(len - 3)) lsr _max_bits > 0
+      && dynamic.dtree.T.tree.Lookup.t.(_distance (pred off)) lsr _max_bits > 0
     | `End, (Fixed | Dynamic _) | `Literal _, (Flat _ | Fixed) | `Copy _, Fixed -> true
 
   type encoder =
