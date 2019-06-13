@@ -1378,7 +1378,7 @@ module T = struct
       Fmt.(Dump.array int) t.lengths
       t.max_code Lookup.pp t.tree
 
-  let make ~length freqs ~bl_count =
+  let make ~length ?(max_length= _max_bits) freqs ~bl_count =
     let heap = Heap.make () in
     let depth = Array.make (2 * _l_codes + 1) 0 in
     let tree_dads = Array.make _heap_size 0 in
@@ -1413,7 +1413,7 @@ module T = struct
            ; heap.heap.(heap.max) <- heap.heap.(_smallest) ) in
 
     go () ;
-    generate_lengths ~tree_dads ~tree_lengths ~max_code ~max_length:_max_bits heap ~bl_count ;
+    generate_lengths ~tree_dads ~tree_lengths ~max_code ~max_length heap ~bl_count ;
     let tree_codes = generate_codes ~tree_lengths ~max_code ~bl_count in
     let length = ref 0 in
 
