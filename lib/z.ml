@@ -2225,10 +2225,10 @@ module L = struct
     let pre = W.max - msk in
     let rst = len - pre in
 
-    if rst > 0
-    then ( B.blit s.b s.w.raw msk pre
-         ; B.blit s.b s.w.raw 0 rst )
-    else B.blit s.b s.w.raw msk len ;
+    ( if rst > 0
+      then ( B.blit s.b s.w.raw msk pre
+           ; B.blit s.b s.w.raw 0 rst )
+      else B.blit s.b s.w.raw msk len ) ;
 
     W.iter s.w (N.succ_literal s.l) ;
     W.junk s.w len ;
