@@ -1351,7 +1351,7 @@ module T = struct
 
         go () ;
 
-        let h = ref (_heap_size - 1) in
+        let h = ref _heap_size in
         for bits = max_length downto 1
         do
           let n = ref bl_count.(bits) in
