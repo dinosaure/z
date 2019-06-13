@@ -2259,6 +2259,7 @@ module L = struct
   and deffast k s =
     assert (B.available s.b >= 2) ;
     assert (W.size s.w >= 2) ;
+    assert (W.size s.w <= W.max) ;
 
     let i = ref s.w.r in
     let len = ref 0 in
