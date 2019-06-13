@@ -2138,12 +2138,11 @@ module W = struct
     let msk = mask t.w in
     let pre = max - msk in
     let rst = len - pre in
-    if rst > 0
-    then ( unsafe_blit buf off t.raw msk pre
-         ; update t
-         ; unsafe_blit buf (off + pre) t.raw 0 rst )
-    else unsafe_blit buf off t.raw msk len ;
-    if t.w + len - t.r > max then ( t.r <- t.r + (t.w + len - t.r) - max ) ;
+    ( if rst > 0
+      then ( unsafe_blit buf off t.raw msk pre
+           ; update t
+           ; unsafe_blit buf (off + pre) t.raw 0 rst )
+      else unsafe_blit buf off t.raw msk len ) ;
     t.w <- t.w + len
 
   let junk t len = t.r <- t.r + len
