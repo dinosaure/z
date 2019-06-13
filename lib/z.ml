@@ -2109,7 +2109,7 @@ module W = struct
      still is a valid index in [raw]. *)
   let unsafe_get_char t i = unsafe_get_char t.raw (mask i) [@@inline always]
 
-  let m = (1 lsl 15) - 1
+  let m = max - 1
 
   let unsafe_get_uint16 t i =
     if (mask i) == m
