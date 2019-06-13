@@ -13,7 +13,7 @@ let q = Z.B.create 4096
 let huffman = Z.N.dynamic_of_frequencies ~literals ~distances
 
 let res = Buffer.create 16
-type res = [ `Ok | `Partial | `End ]
+type res = [ `Ok | `Partial | `Block ]
 
 let pp_decode ppf = function
   | `Await -> Fmt.string ppf "`Await"
@@ -21,18 +21,17 @@ let pp_decode ppf = function
   | `Flush -> Fmt.string ppf "`Flush"
   | `Malformed err -> Fmt.pf ppf "(`Malformed %S)" err
 
-let encoder = Z.N.encoder (`Buffer res) { kind= Z.N.Dynamic huffman; last= true; } ~q
+let q0 = Z.B.of_list
+    [ `Literal '\000'
+    ; `Literal '\000'
+    ; `Copy (1, 258)
+    ; `Copy (1, 256)
+    ; `End ]
+
+let encoder = Z.N.encoder (`Buffer res) ~q:q0
 let () = Fmt.epr "# dynamic huffman: done.\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
-let () = Fmt.epr "# literal 00\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Literal '\000')
-let () = Fmt.epr "# literal 00\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 258))
-let () = Fmt.epr "#\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Copy (1, 256))
-let () = Fmt.epr "#\n%!"
-let[@warning "-8"] `Ok : res = Z.N.encode encoder `End
-let () = Fmt.epr "#\n%!"
+let[@warning "-8"] `Ok : res = Z.N.encode encoder (`Block { kind= Z.N.Dynamic huffman; last= true })
+let[@warning "-8"] `Ok : res = Z.N.encode encoder `Flush
 let () = Fmt.pr "deflated: @[<hov>%a@]\n%!" (Hxd_string.pp Hxd.O.default) (Buffer.contents res)
 let () = Fmt.pr "deflated: %S\n%!" (Buffer.contents res)
 
@@ -87,35 +86,41 @@ let () = Z.B.reset q
 
 let compress ic oc =
   let state = Z.L.state (`Channel ic) ~w ~q in
-  let encoder = Z.N.encoder (`Channel oc) { Z.N.kind= Z.N.Fixed; last= false; } ~q in
-  let dynamic = ref None in
+  let encoder = Z.N.encoder (`Channel oc) ~q in
+  let dynamic = ref Z.N.Fixed in
 
   let rec compress () = match Z.L.compress state with
     | `Await -> assert false
     | `End ->
-      let ret = Z.N.encode encoder (`Block { Z.N.kind= Z.N.Fixed; last= true; }) in
-      pending ret
+      pending @@ Z.N.encode encoder (`Block { Z.N.kind= Z.N.Fixed; last= true; })
     | `Flush ->
-      ( match !dynamic with
-        | Some dynamic ->
-          encode @@ Z.N.encode encoder (`Block { Z.N.kind= Z.N.Dynamic dynamic; last= false; })
-        | None ->
-          ( dynamic := Some (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state))
-          ; encode @@ Z.N.encode encoder `Flush ) )
+      let lit = Z.L.literals state in
+      let dst = Z.L.distances state in
+      Fmt.epr "COMPRESS `FLUSH.\n%!" ;
+      Fmt.epr "DUMP LIT: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (Z.N.unsafe_literals_to_array lit) ;
+      Fmt.epr "DUMP DST: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (Z.N.unsafe_distances_to_array dst) ;
+      dynamic := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:lit ~distances:dst) ;
+      encode @@ Z.N.encode encoder (`Block { Z.N.kind= !dynamic; last= false; })
   and encode = function
     | `Partial -> assert false
     | `Ok -> compress ()
-    | `End ->
-      let dynamic = Z.N.dynamic_of_frequencies
-          ~literals:(Z.L.literals state)
-          ~distances:(Z.L.distances state) in
-      encode @@ Z.N.encode encoder (`Block { Z.N.kind= Z.N.Dynamic dynamic; last= false; })
+    | `Block ->
+      Fmt.epr "ENCODE `BLOCK.\n%!" ;
+      dynamic := Z.N.Dynamic
+          (Z.N.dynamic_of_frequencies
+             ~literals:(Z.L.literals state)
+             ~distances:(Z.L.distances state)) ;
+      encode @@ Z.N.encode encoder (`Block { Z.N.kind= !dynamic; last= false; })
   and pending = function
     | `Partial -> assert false
-    | `End -> encode `End
-    | `Ok -> last (Z.N.encode encoder `End)
+    | `Block -> assert false
+    | `Ok ->
+      Z.B.push_exn q Z.B.eob ;
+      last @@ Z.N.encode encoder `Flush
   and last = function
-    | `Ok -> () | `End | `Partial -> assert false in
+    | `Ok -> ()
+    | `Block -> assert false
+    | `Partial -> assert false in
 
   compress ()
 
