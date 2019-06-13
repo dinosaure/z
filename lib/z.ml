@@ -1356,10 +1356,13 @@ module T = struct
         do
           let n = ref bl_count.(bits) in
 
-          while !n <> 0 do
-            let m = heap.heap.(!h) in
+          while !n != 0 do
             decr h ;
-            if m <= max_code then ( if tree_lengths.(m) <> bits then tree_lengths.(m) <- bits ; decr n ) ;
+            let m = heap.heap.(!h) in
+            if m <= max_code
+            then ( if tree_lengths.(m) <> bits
+                   then ( tree_lengths.(m) <- bits )
+                 ; decr n )
           done
         done )
     else ()
