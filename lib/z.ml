@@ -1578,10 +1578,12 @@ module B = struct
     ((len - 3) lsl 16) lor (off - 1) lor 0x2000000 [@@inline]
 
   let literal chr = Char.code chr [@@inline]
+  let eob = 256
 
   let cmd = function
     | `Literal chr -> literal chr
     | `Copy (off, len) -> copy ~off ~len
+    | `End -> 256
 
   let code cmd = match cmd land 0x2000000 <> 0 with
     | false ->
@@ -1624,6 +1626,12 @@ module B = struct
     else for i = 0 to len - 1 do res := code (unsafe_get t.buf i) :: !res done ;
 
     List.rev !res
+
+  let ( <.> ) f g = fun x -> f (g x)
+
+  let of_list lst =
+    let q = create 4096 in (* TODO *)
+    List.iter (push_exn q <.> cmd) lst ; q
 end
 
 module N = struct
