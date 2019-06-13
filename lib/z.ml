@@ -2289,8 +2289,9 @@ module L = struct
 
         dst := !i - source ; (* XXX(dinosaure): should be safe where [!i] is the newest indice in [w]. *)
 
-        if !dst == 0 || !dst > (1 lsl 15) (* XXX(dinosaure): deliver only valid distance *)
+        if !dst == 0 || !dst >= W.max (* XXX(dinosaure): deliver only valid distance *)
           || source + 3 - min_int >= !i - min_int (* XXX(dinosaure): [source] ∈ no emitted characters *)
+          || source - min_int < s.w.r - min_int (* XXX(dinosaure): too old! *)
           || W.unsafe_get_uint16 s.w !i <> W.unsafe_get_uint16 s.w source
           || W.unsafe_get_uint16 s.w (!i + 1) <> W.unsafe_get_uint16 s.w (source + 1)
         then ( raise_notrace Literal ) ;
