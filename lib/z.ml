@@ -2349,7 +2349,7 @@ module L = struct
 
     if B.is_full s.b
     then flush k s
-    else if i_rem s == 0 then refill fill s else k s
+    else ( if i_rem s == 0 then refill fill s else k s )
 
   let compress s = s.k s
 
