@@ -773,7 +773,6 @@ module M = struct
     | Length ->
       let k d =
         let value = lit.Lookup.t.(d.hold land lit.Lookup.m) land Lookup.mask in
-        Fmt.epr "[slow] literal %d.\n%!" value ;
         let len = lit.Lookup.t.(d.hold land lit.Lookup.m) lsr 15 in
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
@@ -835,7 +834,6 @@ module M = struct
         d.hold <- d.hold lsr len ;
         d.bits <- d.bits - len ;
         d.d <- _base_dist.(d.d) + 1 + extra ;
-        Fmt.epr "[slow] code len: %d, dist: %d.\n%!" d.l d.d ;
         d.jump <- Write ;
         d.s <- Inflate ; (* allocation *)
         K in
@@ -899,7 +897,6 @@ module M = struct
 
           if value < 256
           then ( unsafe_set_uint8 d.o !o_pos value
-               ; Fmt.epr "[fast] literal %d.\n%!" value
                ; Window.add d.w value
                ; incr o_pos
                (* ; jump := Length *) )
@@ -946,8 +943,6 @@ module M = struct
           hold := Nativeint.shift_right_logical !hold len ;
           bits := !bits - len ;
           d.d <- _base_dist.(d.d) + 1 + extra ;
-
-          Fmt.epr "[fast] code len: %d, dist: %d.\n%!" d.l d.d ;
 
           (* if d.d > Window.have d.w then raise Invalid_distance ;
              XXX(dinosaure): [Window.have] does not tell me the truth where
@@ -1018,16 +1013,12 @@ module M = struct
   (* XXX(dinosaure): [huffman] can raise an exception. *)
   let make_table t hlit hdist d =
     try
-      if t.(256) == 0 then ( Fmt.epr "no EOB code.\n%!" ; raise_notrace Invalid_huffman ) ;
+      if t.(256) == 0 then ( raise_notrace Invalid_huffman ) ;
       (* XXX(dinosaure): an huffman tree MUST have at least an End-Of-Block
          symbol. *)
 
-      Fmt.epr "hlit: %d, hdist: %d.\n%!" hlit hdist ;
-
       let t_lit, l_lit = huffman LENS t 0 hlit in
-      Fmt.epr "table length: ok.\n%!" ;
       let t_dist, l_dist = huffman DISTS t hlit hdist in
-      Fmt.epr "table distance: ok.\n%!" ;
 
       let lit = Lookup.make t_lit l_lit in
       let dist = Lookup.make t_dist l_dist in
@@ -1095,7 +1086,6 @@ module M = struct
     while !i < hclen
     do
       let code = !hold land 0x7 in
-      Fmt.epr "blcode: %d.\n%!" code ;
       res.(zigzag.(!i)) <- code ;
       hold := !hold lsr 3 ;
       bits := !bits - 3 ;
@@ -1304,15 +1294,11 @@ module T = struct
     for bits = 1 to _max_bits
     do
       code := (!code + bl_count.(bits - 1)) lsl 1 ;
-      Fmt.epr "BL COUNT(%d): %d.\n%!" (bits - 1) bl_count.(bits - 1) ;
-      Fmt.epr "CODE: %x\n%!" !code ;
       next_code.(bits) <- (!code land 0xffff) ;
     done ;
 
     (* check that the bit counts in [bl_count] are consistent. The last code
        must be all ones. *)
-    Fmt.epr "!code:%d + bl_count.(_max_bits):%d - 1 = (1 lsl _max_bits) - 1:%x.\n%!"
-      !code bl_count.(_max_bits) ((1 lsl _max_bits) - 1) ;
     assert (!code + bl_count.(_max_bits) - 1 = (1 lsl _max_bits) - 1);
 
     for n = 0 to max_code
@@ -1347,7 +1333,7 @@ module T = struct
       tree_lengths.(n) <- bits ;
 
       if n <= max_code (* XXX(dinosaure): it's a leaf. *)
-      then ( Fmt.epr "Update bl_count for node %3d (max_code: %3d) (bits:%3x).\n%!" n max_code bits ; bl_count.(bits) <- bl_count.(bits) + 1 )
+      then ( bl_count.(bits) <- bl_count.(bits) + 1 )
     done ;
 
     if !overflow != 0 (* This happends for example on obj2 and pic of the Calgary corpus. *)
@@ -1363,7 +1349,6 @@ module T = struct
 
           if !overflow > 0 then go () in
 
-        Fmt.epr "OVERFLOW.\n%!" ;
         go () ;
 
         let h = ref (_heap_size - 1) in
@@ -1631,8 +1616,6 @@ module B = struct
     let pre = t.c - msk in
     let rst = len - pre in
 
-    Fmt.epr "LEN: %d (r: %d, w: %d).\n%!" len t.r t.w ;
-
     if rst > 0
     then ( for i = 0 to pre - 1 do res := code (unsafe_get t.buf i) :: !res done
          ; for i = 0 to rst - 1 do res := code (unsafe_get t.buf i) :: !res done )
@@ -1803,7 +1786,6 @@ module N = struct
     then flush (fun e -> c_byte byte k e) e
     else
       ( unsafe_set_uint8 e.o e.o_pos byte
-      ; Fmt.epr ">>> emit [%02x].\n%!" byte
       ; e.o_pos <- e.o_pos + 1
       ; k e )
 
@@ -1813,7 +1795,6 @@ module N = struct
     then flush (fun e -> c_short short k e) e
     else
       ( unsafe_set_uint16 e.o e.o_pos short
-      ; Fmt.epr ">>> emit [%02x:%02x].\n%!" (short land 0xff) (short lsr 8 land 0xff)
       ; e.o_pos <- e.o_pos + 2
       ; k e )
 
@@ -1933,7 +1914,6 @@ module N = struct
     let emit e =
       if !bits >= 16
       then ( unsafe_set_uint16 e.o !o_pos !hold
-           ; Fmt.epr ">> emit [%02x:%02x].\n%!" (!hold land 0xff) (!hold lsr 8 land 0xff)
            ; hold := !hold lsr 16
            ; bits := !bits - 16
            ; o_pos := !o_pos + 2 ) in
@@ -1955,16 +1935,12 @@ module N = struct
 
         match cmd land 0x2000000 == 0 with
         | true ->
-          Fmt.epr "<<< literal %3d.\n%!" cmd ;
-
           let len, v = Lookup.get ltree cmd in
           hold := (v lsl !bits) lor !hold ;
           bits := !bits + len ;
           emit e
         | false ->
           let off, len = cmd land 0xffff, (cmd lsr 16) land 0x1ff in
-
-          Fmt.epr "<<< copy off:%d, len:%d.\n%!" (off + 1) (len + 3);
 
           let code = _length.(len) in
           let len0, v0 = Lookup.get ltree (code + 256 + 1) in
@@ -1988,9 +1964,6 @@ module N = struct
           (* len_max: 48 *)
           emit e
       done ;
-
-      Fmt.epr "leave hot-loop [o_rem: %d], [queue is empty: %b].\n%!"
-        (o_rem e) (B.is_empty e.b) ;
 
       e.hold <- !hold ;
       e.bits <- !bits ;
@@ -2257,8 +2230,6 @@ module L = struct
   let rec fill s =
     let rem = i_rem s in
 
-    Fmt.epr "fill window> rem: %d.\n%!" rem ;
-
     if rem <= 0 then ( if rem < 0 then pending s else refill fill s )
     else
       let len = min (W.available s.w) rem in
@@ -2284,12 +2255,10 @@ module L = struct
     let exception Literal in
 
     (* XXX(dinosaure): prelude, a [match] is >= 3.  *)
-    Fmt.epr ">>> Record literal:%02x:%a.\n%!" (W.unsafe_get_uint8 s.w !i) pp_chr (W.unsafe_get_char s.w !i) ;
     let chr = W.unsafe_get_char s.w !i in
     B.push_exn s.b (B.cmd (`Literal chr)) ; incr i ;
     N.succ_literal s.l chr ;
     let chr = W.unsafe_get_char s.w !i in
-    Fmt.epr ">>> Record literal:%02x:%a.\n%!" (W.unsafe_get_uint8 s.w !i) pp_chr (W.unsafe_get_char s.w !i) ;
     B.push_exn s.b (B.cmd (`Literal (W.unsafe_get_char s.w !i))) ; incr i ;
     N.succ_literal s.l chr ;
 
@@ -2297,7 +2266,7 @@ module L = struct
       try
         if W.unsafe_get_uint8 s.w !i == W.unsafe_get_uint8 s.w (!i - 1)
            && W.unsafe_get_uint16 s.w (!i - 1) == W.unsafe_get_uint16 s.w (!i + 1)
-        then ( Fmt.epr ">>> Record match (dst:1).\n%!" ; len := 3 ; dst := 1 ; raise_notrace Match ) ;
+        then ( len := 3 ; dst := 1 ; raise_notrace Match ) ;
 
         let hash =
           let v = W.unsafe_get_uint16 s.w !i in
@@ -2306,20 +2275,18 @@ module L = struct
         s.h.(hash land s.h_msk) <- !i ;
 
         dst := !i - source ; (* XXX(dinosaure): should be safe where [!i] is the newest indice in [w]. *)
-        Fmt.epr ">>> try a match on dst:%d (source: %d).\n%!" !dst source ;
 
         if !dst == 0 || !dst > (1 lsl 15) (* XXX(dinosaure): deliver only valid distance *)
           || source + 3 - min_int >= !i - min_int (* XXX(dinosaure): [source] ∈ no emitted characters *)
           || W.unsafe_get_uint16 s.w !i <> W.unsafe_get_uint16 s.w source
           || W.unsafe_get_uint16 s.w (!i + 1) <> W.unsafe_get_uint16 s.w (source + 1)
-        then ( Fmt.epr ">>> finaly, a literal.\n%!" ; raise_notrace Literal ) ;
+        then ( raise_notrace Literal ) ;
 
         len := 3 ;
 
         raise_notrace Match
       with
       | Literal ->
-        Fmt.epr ">>> Record literal:%02x:%a.\n%!" (W.unsafe_get_uint8 s.w !i) pp_chr (W.unsafe_get_char s.w !i) ;
         let chr = W.unsafe_get_char s.w !i in
         B.push_exn s.b (B.cmd (`Literal chr)) ; incr i ;
         N.succ_literal s.l chr
@@ -2339,7 +2306,6 @@ module L = struct
             && W.unsafe_get_uint8 s.w (!i + !len) == v
             then incr len ;
 
-            Fmt.epr ">>> Record distance, off:%d, len:%d.\n%!" !dst !len ;
             B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len ;
             N.succ_length s.l !len ;
             N.succ_distance s.d !dst )
@@ -2359,7 +2325,6 @@ module L = struct
             && W.unsafe_get_uint8 s.w (!i + !len) == W.unsafe_get_uint8 s.w (source + !len)
             then incr len ;
 
-            Fmt.epr ">>> Record distance, off:%d, len:%d.\n%!" !dst !len ;
             B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len ;
             N.succ_length s.l !len ;
             N.succ_distance s.d !dst )
