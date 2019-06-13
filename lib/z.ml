@@ -1679,7 +1679,8 @@ module N = struct
     T.scan ltree.T.lengths ltree.T.max_code ~bl_freqs ;
     T.scan dtree.T.lengths dtree.T.max_code ~bl_freqs ;
 
-    let bltree = T.make ~length:_bl_codes bl_freqs ~bl_count in
+    let bltree = T.make ~length:_bl_codes ~max_length:7 bl_freqs ~bl_count in
+    (* XXX(dinosaure): [T.make] needs [max_length] to avoid generation of a bad bltree (limited to 7 bits with extra). *)
     let max_blindex = ref (_bl_codes - 1) in
     let exception Break in
 
