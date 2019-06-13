@@ -103,7 +103,7 @@ let fill2 v dst0 dst0_off dst1 dst1_off len =
     unsafe_set_uint8 dst1 (dst1_off + i) v
   done
 
-let io_buffer_size = 24
+let io_buffer_size = 65536
 
 (* XXX(dinosaure): Specialization. *)
 
