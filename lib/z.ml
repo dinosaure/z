@@ -1733,10 +1733,7 @@ module N = struct
   type kind = Flat of int | Fixed | Dynamic of dynamic
   type block = { kind: kind; last: bool; }
 
-  type offset = int
-  type length = int
-  type code = [ `Literal of char | `Copy of offset * length ]
-  type encode = [ code | `Await | `Flush | `End | `Block of block ]
+  type encode = [ `Await | `Flush | `Block of block ]
 
   let exists v block = match v, block.kind with
     | (`Copy _ | `End), Flat _ -> Fmt.invalid_arg "copy code in flat block can not exist"
@@ -1757,7 +1754,7 @@ module N = struct
     ; mutable o_pos : int
     ; mutable o_max : int
     ; b : B.t
-    ; mutable k : encoder -> encode -> [ `Ok | `Partial | `End ] }
+    ; mutable k : encoder -> encode -> [ `Ok | `Partial | `Block ] }
 
   (* remaining bytes to write in [e.o]. *)
   let o_rem e = e.o_max - e.o_pos + 1
