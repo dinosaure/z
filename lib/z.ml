@@ -2069,14 +2069,14 @@ module W = struct
     ; mutable c : Optint.t }
 
   let max = 1 lsl 15
-  let mask = (1 lsl 15) - 1
+  let mask = max - 1
   let ( = ) (a : int) b = a == b
 
   let mask v = v land mask
   let empty t = t.r = t.w
   let size t = t.w - t.r
-  let available t = (1 lsl 15) - (t.w - t.r)
-  let full t = size t = (1 lsl 15)
+  let available t = max - (t.w - t.r)
+  let full t = size t = max
   let length t = size t
 
   let is_empty t = empty t
