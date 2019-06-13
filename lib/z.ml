@@ -1365,7 +1365,6 @@ module T = struct
                  ; decr n )
           done
         done )
-    else ()
 
   type tree =
     { lengths : int array
