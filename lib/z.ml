@@ -1055,7 +1055,7 @@ module M = struct
     (* XXX(dinosaure): [prv] and [i] are stored as associated env of [go]. We
        can not retake them from [d.s]. *)
     let rec record i copy len d =
-      if i + copy > max_res then err_invalid_dictionary d
+      if i + copy > max_res then ( err_invalid_dictionary d )
       else ( for x = 0 to copy - 1 do res.(i + x) <- len done
            ; if i + copy < max_res then get (fun d -> go (i + copy) d) d else ret res d )
     and go i v d =
@@ -1063,28 +1063,42 @@ module M = struct
       then ( res.(i) <- v
            ; if succ i < max_res then get (fun d -> go (succ i) d) d else ret res d )
       else if v == 16
-      then ( let k v d = record i (v + 3) res.(i - 1) d in
-             if i == 0 then err_invalid_dictionary d else get_bits 2 k d )
+      then ( let k v d =
+               record i (v + 3) res.(i - 1) d in
+             if i == 0
+             then ( err_invalid_dictionary d )
+             else get_bits 2 k d )
       else if v == 17
-      then ( let k v d = record i (v + 3) 0 d in
+      then ( let k v d =
+               record i (v + 3) 0 d in
              get_bits 3 k d )
       else if v == 18
-      then ( let k v d = record i (v + 11) 0 d in
+      then ( let k v d =
+               record i (v + 11) 0 d in
              get_bits 7 k d )
       else assert false (* TODO: really never occur? *) in
     let k v d = go 0 v d in
     get k d
 
+  (* XXX(dinosaure): previous design asks to load [hclen * 3] bits, however, in
+     a specific context, it can oveflow [hold]. So new design is to ensure to
+     have enough bytes to inflate huffman tree. *)
+
   let table d =
     let[@warning "-8"] Table { hlit; hdist; hclen; } = d.s in
     let hold = ref d.hold in
     let bits = ref d.bits in
+    let i_pos = ref d.i_pos in
     let i = ref 0 in
 
     let res = Array.make 19 0 in
 
     while !i < hclen
     do
+      if !bits < 3
+      then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+           ; bits := !bits + 8
+           ; incr i_pos ) ;
       let code = !hold land 0x7 in
       res.(zigzag.(!i)) <- code ;
       hold := !hold lsr 3 ;
@@ -1097,12 +1111,17 @@ module M = struct
 
       d.hold <- !hold ;
       d.bits <- !bits ;
+      d.i_pos <- !i_pos ;
       d.s <- Inflate_table { t; l
                            ; r= Array.make (hlit + hdist) 0
                            ; h= (hlit, hdist, hclen) } ;
       inflate_table d
     with Invalid_huffman ->
       err_invalid_dictionary d
+
+  let (//) x y =
+    if y < 0 then raise Division_by_zero
+    else ( if x > 0 then 1 + ((x - 1) / y) else 0) [@@inline]
 
   let dynamic d =
     let l_header d =
@@ -1113,7 +1132,18 @@ module M = struct
       d.s <- Table { hlit; hdist; hclen; } ;
       d.hold <- d.hold lsr 14 ;
       d.bits <- d.bits - 14 ;
-      c_peek_bits (hclen * 3) table d in
+
+      (* XXX(dinosaure): we ensure to have enough bytes to start to inflate
+         huffman tree. *)
+
+      let rec k d =
+        let rem = i_rem d in
+
+        if rem < 0 then err_unexpected_end_of_input d
+        else if (hclen * 3 - d.bits) // 8 > rem
+        then refill k d
+        else table d in
+      k d in
     c_peek_bits 14 l_header d
 
   let decode_k d = match d.s with
@@ -1136,7 +1166,16 @@ module M = struct
         d.k <- k ;
         k d in
       c_peek_bits 3 l_header d
-    | Table { hclen; _ } -> c_peek_bits (hclen * 3) table d
+    | Table { hclen; _ } ->
+      (* XXX(dinosaure): not really the best design but it's work. *)
+      let rec k d =
+        let rem = i_rem d in
+
+        if rem < 0 then err_unexpected_end_of_input d
+        else if (hclen * 3 - d.bits) // 8 > rem
+        then refill k d
+        else table d in
+      k d
     | Inflate_table _ -> d.k d
     | Inflate ->
       if i_rem d > 1
