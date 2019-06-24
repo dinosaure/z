@@ -938,8 +938,6 @@ int flush;
         case LENLENS:
             while (state->have < state->ncode) {
                 NEEDBITS(3);
-                Tracevv((stderr, "blcode %d l 3\n", BITS(3)));
-                Tracev((stderr, "hold %8x, bits: %2d.\n", hold, bits));
                 state->lens[order[state->have++]] = (unsigned short)BITS(3);
                 DROPBITS(3);
             }
@@ -956,7 +954,6 @@ int flush;
                 break;
             }
             Tracev((stderr, "inflate:       code lengths ok\n"));
-            Tracev((stderr, "hold %8x, bits: %2d.\n", hold, bits));
             state->have = 0;
             state->mode = CODELENS;
         case CODELENS:
@@ -966,9 +963,7 @@ int flush;
                     if ((unsigned)(here.bits) <= bits) break;
                     PULLBYTE();
                 }
-                Tracevv((stderr, "cd %2d l %1d v %4x", here.val, here.bits, BITS(here.bits)));
                 if (here.val < 16) {
-                    Tracevv((stderr, "\n"));
                     DROPBITS(here.bits);
                     state->lens[state->have++] = here.val;
                 }
@@ -976,7 +971,6 @@ int flush;
                     if (here.val == 16) {
                         NEEDBITS(here.bits + 2);
                         DROPBITS(here.bits);
-                        Tracevv((stderr, " l 2 v %3d\n", BITS(2)));
                         if (state->have == 0) {
                             strm->msg = (char *)"invalid bit length repeat";
                             state->mode = BAD;
@@ -989,7 +983,6 @@ int flush;
                     else if (here.val == 17) {
                         NEEDBITS(here.bits + 3);
                         DROPBITS(here.bits);
-                        Tracevv((stderr, " l 3 v %3d\n", BITS(3)));
                         len = 0;
                         copy = 3 + BITS(3);
                         DROPBITS(3);
@@ -997,7 +990,6 @@ int flush;
                     else {
                         NEEDBITS(here.bits + 7);
                         DROPBITS(here.bits);
-                        Tracevv((stderr, " l 7 v %3d\n", BITS(7)));
                         len = 0;
                         copy = 11 + BITS(7);
                         DROPBITS(7);
@@ -1075,14 +1067,13 @@ int flush;
                 DROPBITS(last.bits);
                 state->back += last.bits;
             }
-            int v = BITS(here.bits);
             DROPBITS(here.bits);
             state->back += here.bits;
             state->length = (unsigned)here.val;
             if ((int)(here.op) == 0) {
                 Tracevv((stderr, here.val >= 0x20 && here.val < 0x7f ?
-                        "inflate:         literal '%c' (c: %4x, l: %3d)\n" :
-                        "inflate:         literal 0x%02x (c: %4x, l: %3d)\n", here.val, v, here.bits));
+                        "inflate:         literal '%c'\n" :
+                        "inflate:         literal 0x%02x\n", here.val));
                 state->mode = LIT;
                 break;
             }
