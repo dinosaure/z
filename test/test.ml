@@ -775,8 +775,7 @@ let tree_0 () =
   Alcotest.test_case "empty literals/lengths freqs" `Quick @@ fun () ->
   let literals = Z.N.make_literals () in
   let literals = Z.N.unsafe_literals_to_array literals in
-  let bl_count = Array.make (_max_bits + 1) 0 in
-  let tree = Z.T.make ~length:_l_codes literals ~bl_count in
+  let tree = Z.T.make ~length:_l_codes literals in
   let lengths = ref [] in
   let codes = ref [] in
   Array.iteri (fun n -> function
@@ -836,8 +835,7 @@ let tree_rfc5322_corpus () =
            0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; 0; 0;
            0;    0;    0;    0;    0;    0;     0;     0;     0;    0;    0;   0;   0;   0;    0;  0;   0; |] in
   Alcotest.(check int) "length of freqs" (2 * _l_codes + 1) (Array.length literals) ;
-  let bl_count = Array.make (_max_bits + 1) 0 in
-  let ltree = Z.T.make ~length:_l_codes literals ~bl_count in
+  let ltree = Z.T.make ~length:_l_codes literals in
   let len_6, code_6 = Z.Lookup.get ltree.Z.T.tree (Char.code '6') in
   let len_eob, code_eob = Z.Lookup.get ltree.Z.T.tree 256 in
   Alcotest.(check (pair int int)) "literal 6" (10, 0x35f) (len_6, code_6) ;

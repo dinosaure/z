@@ -15,6 +15,11 @@
  (libraries checkseum.c hxd.string z))
 
 (executable
+ (name miniz_example)
+ (modules miniz_example)
+ (libraries checkseum.c z))
+
+(executable
  (name zpipe)
  (modules zpipe)
  (libraries camlzip))

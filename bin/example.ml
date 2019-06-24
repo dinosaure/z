@@ -9,7 +9,7 @@ let () = Z.N.succ_distance distances 1
 
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
-let q = Z.B.create 4096
+let q = Z.B.create 16384
 let huffman = Z.N.dynamic_of_frequencies ~literals ~distances
 
 let res = Buffer.create 16
@@ -88,10 +88,12 @@ let compress ic oc =
   let state = Z.L.state (`Channel ic) ~w ~q in
   let encoder = Z.N.encoder (`Channel oc) ~q in
   let dynamic = ref Z.N.Fixed in
+  let compressed = ref [] in
 
   let rec compress () = match Z.L.compress state with
     | `Await -> assert false
     | `End ->
+      compressed := Z.B.to_list q :: !compressed ;
       pending @@ Z.N.encode encoder (`Block { Z.N.kind= Z.N.Fixed; last= true; })
     | `Flush ->
       let lit = Z.L.literals state in
@@ -99,6 +101,7 @@ let compress ic oc =
       Fmt.epr "COMPRESS `FLUSH.\n%!" ;
       Fmt.epr "DUMP LIT: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (Z.N.unsafe_literals_to_array lit) ;
       Fmt.epr "DUMP DST: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (Z.N.unsafe_distances_to_array dst) ;
+      compressed := Z.B.to_list q :: !compressed ;
       dynamic := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:lit ~distances:dst) ;
       encode @@ Z.N.encode encoder (`Block { Z.N.kind= !dynamic; last= false; })
   and encode = function
@@ -122,7 +125,9 @@ let compress ic oc =
     | `Block -> assert false
     | `Partial -> assert false in
 
-  compress ()
+  compress () ; let oc = open_out "result.out" in
+  let buffer = reconstruct (List.concat (List.rev !compressed)) in
+  output_string oc buffer ; close_out oc
 
 let oc = open_out "result.z"
 let () = compress stdin oc ; close_out oc

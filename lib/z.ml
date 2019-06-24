@@ -463,11 +463,11 @@ module M = struct
         for i = 1 to 15 do
           left := !left lsl 1 ;
           left := !left - bl_count.(i) ;
-          if !left < 0 then raise Invalid_huffman ;
+          if !left < 0 then ( Fmt.epr "Got an invalid huffman in [huffman]:0.\n%!" ; raise Invalid_huffman ) ;
           code := (!code + bl_count.(i)) lsl 1 ;
           next_code.(i) <- !code
         done ;
-        if !left > 0 && (kind = CODES || !max != 1) then raise Invalid_huffman ;
+        if !left > 0 && (kind = CODES || !max != 1) then ( Fmt.epr "Got an invalid huffman in [huffman]:1.\n%!" ; raise Invalid_huffman ) ;
         let ordered = ref Heap.None in
         let max = ref 0 in
         for i = 0 to codes - 1 do
@@ -573,7 +573,7 @@ module M = struct
       ; d.i_len <- j + l - 1 )
 
   (* get new input in [d.i] and [k]ontinue. *)
-  let refill k d = match d.src with
+  let refill k d = Fmt.epr "refill.\n%!" ; match d.src with
     | `String _ ->
       eoi d ; k d
     | `Channel ic ->
@@ -592,7 +592,7 @@ module M = struct
       then
         if rem < 0 (* end of input *)
         then err_unexpected_end_of_input d
-        else refill (c_peek_bits n k) d (* allocation *)
+        else ( Fmt.epr "refill.\n%!" ; refill (c_peek_bits n k) d (* allocation *) )
       else
         ( let byte = unsafe_get_uint8 d.i d.i_pos in
           d.i_pos <- d.i_pos + 1
@@ -1013,7 +1013,7 @@ module M = struct
   (* XXX(dinosaure): [huffman] can raise an exception. *)
   let make_table t hlit hdist d =
     try
-      if t.(256) == 0 then ( raise_notrace Invalid_huffman ) ;
+      if t.(256) == 0 then ( Fmt.epr "End-of-block missed.\n%!" ; raise_notrace Invalid_huffman ) ;
       (* XXX(dinosaure): an huffman tree MUST have at least an End-Of-Block
          symbol. *)
 
@@ -1027,6 +1027,7 @@ module M = struct
       d.distance <- dist ;
       d.jump <- Length ;
       d.s <- Inflate ; (* allocation *)
+      Fmt.epr "> huffman tree: ok.\n%!" ;
       inflate lit dist Length d
     with Invalid_huffman ->
       err_invalid_dictionary d
@@ -1100,6 +1101,7 @@ module M = struct
            ; bits := !bits + 8
            ; incr i_pos ) ;
       let code = !hold land 0x7 in
+      Fmt.epr "blcode %d l 3\n" code ;
       res.(zigzag.(!i)) <- code ;
       hold := !hold lsr 3 ;
       bits := !bits - 3 ;
@@ -1323,34 +1325,185 @@ module T = struct
     | '\032' .. '\126' -> true
     | _ -> false
 
-  let generate_codes ~tree_lengths ~max_code ~bl_count =
+  let generate_codes ~tree_lengths ~length ~bl_count =
     let tree_codes = Array.make (Array.length tree_lengths) 0 in
     let next_code = Array.make (_max_bits + 1) 0 in
     let code = ref 0 in
 
-    (* The distribution counts are fist used to generate the code values without
-       bit reversal. *)
-    for bits = 1 to _max_bits
+    (* The distribution counts are first used to generate the code values without
+       bit reversal. [miniz] has the same code but start with [bits = 2]. TODO: why [miniz]? why? *)
+    for bits = 2 to _max_bits
     do
       code := (!code + bl_count.(bits - 1)) lsl 1 ;
       next_code.(bits) <- (!code land 0xffff) ;
     done ;
 
-    (* check that the bit counts in [bl_count] are consistent. The last code
-       must be all ones. *)
-    assert (!code + bl_count.(_max_bits) - 1 = (1 lsl _max_bits) - 1);
-
-    for n = 0 to max_code
+    (* XXX(dinosaure): [miniz] should do the same but in other weird way where
+       we find [reverse_code] inlined into the loop. *)
+    for n = 0 to length - 1
     do
       let len = tree_lengths.(n) in
       if len > 0
       then
         (* Now reverse the bits. *)
         ( tree_codes.(n) <- reverse_code next_code.(len) len
+        ; Fmt.epr "codes[%3d] = %4x\n" n tree_codes.(n)
         ; next_code.(len) <- next_code.(len) + 1 )
     done ;
 
     tree_codes
+
+  let set_key s i v =
+    s.(i) <- (s.(i) lsr 16) lsl 16 lor (v land 0xffff)
+  [@@inline]
+
+  let get_key s i = s.(i) land 0xffff
+  [@@inline]
+
+  let set_idx s i v =
+    s.(i) <- (v lsl 16) lor (s.(i) land 0xffff)
+  [@@inline]
+
+  let get_idx s i =
+    s.(i) lsr 16
+  [@@inline]
+
+  let radix_sort_symbols ~length si so =
+    let hist = Array.make (256 * 2) 0 in
+
+    for i = 0 to length - 1
+    do
+      let freq = get_key si i in
+      Fmt.epr "hist[freq:%d & 0xFF]++\n%!" freq ;
+      hist.(freq land 0xff) <- hist.(freq land 0xff) + 1 ;
+      Fmt.epr "hist[256 + ((freq >> 8):%d & 0xFF)]++\n%!" (freq lsr 8) ;
+      hist.(256 + ((freq lsr 8) land 0xff)) <- hist.(256 + ((freq lsr 8) land 0xff)) + 1 ;
+    done ;
+
+    let total_passes = ref 2 in
+    let pass_shift = ref 0 in
+    let offsets = Array.make 256 0 in
+    let cr = ref si and nw = ref so in
+
+    while !total_passes > 1 && length == hist.((!total_passes - 1) * 256) do decr total_passes done ;
+
+    for pass = 0 to !total_passes - 1
+    do
+      let p = (pass lsl 8) in
+      let cur_ofs = ref 0 in
+
+      for i = 0 to 255 do offsets.(i) <- !cur_ofs ; cur_ofs := !cur_ofs + hist.(p + i) done ;
+
+      for i = 0 to length - 1 do
+        let x = ((get_key !cr i) lsr !pass_shift) land 0xff in
+
+        Fmt.epr "nsyms[offsets[(csyms[i:%3d].m_key:%4d >> pass_shift:%d) & 0xFF]:%2d++] = csyms[i]:(key:%4d, idx:%3d)\n"
+          i (get_key !cr i) !pass_shift offsets.(x) (get_key !cr i) (get_idx !cr i) ;
+
+        (!nw).(offsets.(x)) <- (!cr).(i) ;
+        offsets.(x) <- offsets.(x) + 1 ;
+      done ;
+
+      let tp = !cr in
+      cr := !nw ;
+      nw := tp ;
+      pass_shift := !pass_shift + 8 ;
+    done ;
+
+    !cr
+
+  let calculate_minimum_redundancy s n =
+    if n == 0 then ()
+    else if n == 1 then set_key s 0 1
+    else
+      ( set_key s 0 (get_key s 0 + get_key s 1)
+      ; let root = ref 0 in
+        let leaf = ref 2 in
+
+        for next = 1 to n - 2 do
+          if !leaf >= n || get_key s !root < get_key s !leaf
+          then ( set_key s next (get_key s !root)
+               ; set_key s !root next
+               ; incr root )
+          else ( set_key s next (get_key s !leaf) ; incr leaf ) ;
+
+          if !leaf >= n || (!root < next && get_key s !root < get_key s !leaf)
+          then ( set_key s next (get_key s next + get_key s !root)
+               ; set_key s !root next
+               ; incr root )
+          else ( set_key s next (get_key s next + get_key s !leaf) ; incr leaf )
+        done ;
+
+        set_key s (n - 2) 0 ;
+
+        for next = n - 3 downto 0 do set_key s next (get_key s (get_key s next) + 1) done ;
+
+        let avbl = ref 1 in
+        let used = ref 0 and dpth = ref 0 in
+        let root = ref (n - 2) in
+        let next = ref (n - 1) in
+
+        while !avbl > 0 do
+          while !root >= 0 && get_key s !root == !dpth do incr used ; decr root done ;
+          while !avbl > !used do set_key s !next !dpth ; decr next ; decr avbl done ;
+
+          avbl := 2 * !used ;
+          incr dpth ;
+          used := 0 ;
+        done )
+
+  let _max_supported_huff_codesize = 32
+
+  let huffman_enforce_max_length ~length ~bl_count ~max_length =
+    let exception Break in
+
+    if length > 1
+    then ( let total = ref 0 in
+           for i = max_length + 1 to _max_supported_huff_codesize do bl_count.(max_length) <- bl_count.(max_length) + bl_count.(i) done
+         ; for i = max_length downto 1 do total := !total + (bl_count.(i) lsl (max_length - i)) done
+         ; while !total != (1 lsl max_length) do
+           bl_count.(max_length) <- bl_count.(max_length) - 1
+         ; ( try for i = max_length - 1 downto 1 do
+                 if bl_count.(i) > 0
+                 then ( bl_count.(i) <- bl_count.(i) - 1
+                      ; bl_count.(i + 1) <- bl_count.(i + 1) + 2
+                      ; raise_notrace Break )
+                 done
+             with Break -> () )
+         ; decr total done )
+
+  let optimize_huffman_table freqs ~length ~max_length ~bl_count =
+    let si = Array.make 288 0 in
+    let so = Array.make 288 0 in
+    let used = ref 0 in
+
+    for i = 0 to length - 1
+    do
+      if freqs.(i) > 0
+      then ( si.(!used) <- (i lsl 16) lor (freqs.(i) land 0xffff) ; incr used )
+    done ;
+
+    let symbols = radix_sort_symbols ~length:!used si so in
+    calculate_minimum_redundancy symbols !used ;
+
+    for i = 0 to !used - 1 do Fmt.epr "symbols[%3d]: key:%4d, idx:%3d\n%!" i (get_key symbols i) (get_idx symbols i) done ;
+    for i = 0 to !used - 1 do bl_count.(get_key symbols i) <- bl_count.(get_key symbols i) + 1 done ;
+
+    huffman_enforce_max_length ~length:!used ~bl_count ~max_length ;
+
+    let j = ref !used in
+    let tree_lengths = Array.make 288 0 in
+
+    for i = 1 to max_length do
+      Fmt.epr "num_codes[i:%2d] = %d\n" i bl_count.(i) ;
+
+      for _ = bl_count.(i) downto 1 do
+        Fmt.epr "huff_code_sizes[pSyms[--j:%3d].m_sym_index:%3d] = i:%d\n" (!j - 1) (get_idx symbols (!j - 1)) i ;
+        decr j ; tree_lengths.(get_idx symbols !j) <- i
+      done
+    done ;
+
+    tree_lengths
 
   let generate_lengths ~tree_dads ~tree_lengths ~max_code ~max_length heap ~bl_count =
     (* assert (Array.length bl_count = _max_bits + 1) ;
@@ -1417,43 +1570,48 @@ module T = struct
       Fmt.(Dump.array int) t.lengths
       t.max_code Lookup.pp t.tree
 
-  let make ~length ?(max_length= _max_bits) freqs ~bl_count =
-    let heap = Heap.make () in
-    let depth = Array.make (2 * _l_codes + 1) 0 in
-    let tree_dads = Array.make _heap_size 0 in
-    let tree_lengths = Array.make _heap_size 0 in
+  let make ~length ?(max_length= _max_bits) freqs =
+    let bl_count = Array.make (1 + _max_supported_huff_codesize) 0 in
+    (*
+      let heap = Heap.make () in
+      let depth = Array.make (2 * _l_codes + 1) 0 in
+      let tree_dads = Array.make _heap_size 0 in
+      let tree_lengths = Array.make _heap_size 0 in
 
-    let max_code = Heap.populate ~length ~freqs ~depth tree_lengths heap in
-    let max_code = Heap.pkzip max_code ~freqs ~depth heap in
+      let max_code = Heap.populate ~length ~freqs ~depth tree_lengths heap in
+      let max_code = Heap.pkzip max_code ~freqs ~depth heap in
 
-    for n = heap.len / 2 downto 1 do Heap.pqdownheap ~freqs ~depth heap n done ;
+      for n = heap.len / 2 downto 1 do Heap.pqdownheap ~freqs ~depth heap n done ;
 
-    let node = ref length in
+      let node = ref length in
 
-    let rec go () =
-      let n = Heap.pqremove ~freqs ~depth heap in
-      let m = heap.heap.(_smallest) in
+      let rec go () =
+        let n = Heap.pqremove ~freqs ~depth heap in
+        let m = heap.heap.(_smallest) in
 
-      heap.max <- heap.max - 1 ;
-      heap.heap.(heap.max) <- n ;
-      heap.max <- heap.max - 1 ;
-      heap.heap.(heap.max) <- m ;
+        heap.max <- heap.max - 1 ;
+        heap.heap.(heap.max) <- n ;
+        heap.max <- heap.max - 1 ;
+        heap.heap.(heap.max) <- m ;
 
-      freqs.(!node) <- freqs.(n) + freqs.(m) ;
-      depth.(!node) <- (if depth.(n) >= depth.(m) then depth.(n) else depth.(m)) + 1 ;
-      tree_dads.(n) <- !node ;
-      tree_dads.(m) <- !node ;
-      heap.heap.(_smallest) <- !node ;
-      incr node ;
-      Heap.pqdownheap ~freqs ~depth heap _smallest ;
+        freqs.(!node) <- freqs.(n) + freqs.(m) ;
+        depth.(!node) <- (if depth.(n) >= depth.(m) then depth.(n) else depth.(m)) + 1 ;
+        tree_dads.(n) <- !node ;
+        tree_dads.(m) <- !node ;
+        heap.heap.(_smallest) <- !node ;
+        incr node ;
+        Heap.pqdownheap ~freqs ~depth heap _smallest ;
 
-      if heap.len >= 2 then go ()
-      else ( heap.max <- heap.max - 1
-           ; heap.heap.(heap.max) <- heap.heap.(_smallest) ) in
+        if heap.len >= 2 then go ()
+        else ( heap.max <- heap.max - 1
+            ; heap.heap.(heap.max) <- heap.heap.(_smallest) ) in
 
-    go () ;
-    generate_lengths ~tree_dads ~tree_lengths ~max_code ~max_length heap ~bl_count ;
-    let tree_codes = generate_codes ~tree_lengths ~max_code ~bl_count in
+      go () ;
+      generate_lengths ~tree_dads ~tree_lengths ~max_code ~max_length heap ~bl_count ;
+    *)
+    let tree_lengths = optimize_huffman_table freqs ~length ~max_length ~bl_count in
+    let tree_codes = generate_codes ~tree_lengths ~length ~bl_count in
+
     let length = ref 0 in
 
     let tree =
@@ -1462,53 +1620,84 @@ module T = struct
         ((len lsl _max_bits) lor code))
         tree_lengths tree_codes in
     { lengths= tree_lengths
-    ; max_code
+    ; max_code= 0 (* TODO *)
     ; tree= { Lookup.t= tree
             ; m= (1 lsl !length) - 1
             ; l= !length } }
 
-  let scan tree_lengths max_code ~bl_freqs  =
-    let prevlen = ref (-1) in
-    let nextlen = ref tree_lengths.(0) in
-    let curlen = ref !nextlen in
+  let rle_prev_code_size rle_repeat_count prev_code_size symbols bl_freqs bl_symbols =
+    if !rle_repeat_count > 0
+    then ( if !rle_repeat_count < 3
+           then ( bl_freqs.(!prev_code_size) <- bl_freqs.(!prev_code_size) + !rle_repeat_count
+                ; Fmt.epr "bl_freqs[%3d] += %d\n%!" !prev_code_size !rle_repeat_count
+                ; while !rle_repeat_count > 0 do Fmt.epr "bl_symbols[%3d] = %3d\n%!" !symbols !prev_code_size
+                                               ; bl_symbols.(!symbols) <- !prev_code_size ; incr symbols ; decr rle_repeat_count done )
+           else ( bl_freqs.(_rep_3_6) <- bl_freqs.(_rep_3_6) + 1
+                ; Fmt.epr "bl_freqs[%3d]++\n%!" _rep_3_6
+                ; Fmt.epr "bl_symbols[%3d] = %3d\n" !symbols _rep_3_6
+                ; bl_symbols.(!symbols) <- _rep_3_6
+                ; Fmt.epr "bl_symbols[%3d] = %3d\n" (!symbols + 1) (!rle_repeat_count - 3)
+                ; bl_symbols.(!symbols + 1) <- !rle_repeat_count - 3
+                ; symbols := !symbols + 2 )
+         ; rle_repeat_count := 0 )
+  [@@inline]
 
-    let count = ref 0 in
+  let rle_zero_code_size rle_z_count symbols bl_freqs bl_symbols =
+    if !rle_z_count > 0
+    then ( if !rle_z_count < 3
+           then ( bl_freqs.(0) <- bl_freqs.(0) + !rle_z_count
+                ; Fmt.epr "bl_freqs[  0] += %d\n%!" !rle_z_count
+                ; while !rle_z_count > 0 do Fmt.epr "bl_symbols[%3d] =   0\n%!" !symbols
+                                          ; bl_symbols.(!symbols) <- 0 ; incr symbols ; decr rle_z_count done )
+           else if !rle_z_count <= 10
+           then ( bl_freqs.(_repz_3_10) <- bl_freqs.(_repz_3_10) + 1
+                ; Fmt.epr "bl_freqs[%3d]++\n%!" _repz_3_10
+                ; Fmt.epr "bl_symbols[%3d] = %3d\n" !symbols _repz_3_10
+                ; bl_symbols.(!symbols) <- _repz_3_10
+                ; Fmt.epr "bl_symbols[%3d] = %3d\n" (!symbols + 1) (!rle_z_count - 3)
+                ; bl_symbols.(!symbols + 1) <- !rle_z_count - 3
+                ; symbols := !symbols + 2 )
+           else ( bl_freqs.(_repz_11_138) <- bl_freqs.(_repz_11_138) + 1
+                ; Fmt.epr "bl_freqs[%3d]++\n%!" _repz_11_138
+                ; bl_symbols.(!symbols) <- _repz_11_138
+                ; bl_symbols.(!symbols + 1) <- !rle_z_count - 11
+                ; symbols := !symbols + 2 )
+         ; rle_z_count := 0 )
 
-    let max_count = ref 7 in
-    let min_count = ref 4 in
+  let scan_and_make tree_lengths max_code ~bl_freqs ~bl_symbols =
+    let rle_z_count = ref 0 in
+    let rle_repeat_count = ref 0 in
+    let prev_code_size = ref 0xff in
+    let symbols = ref 0 in
 
-    let exception Continue in
+    for i = 0 to max_code - 1 do
+      let code_size = tree_lengths.(i) in
 
-    if !nextlen = 0 then ( max_count := 138 ; min_count := 3 ) ;
-    tree_lengths.(max_code + 1) <- 0xffff ;
+      Fmt.epr "code_size[%3d]: %3d\n%!" i code_size ;
 
-    for n = 0 to max_code do
-      curlen := !nextlen ;
-      nextlen := tree_lengths.(n + 1) ;
-      incr count ;
+      if code_size == 0
+      then ( rle_prev_code_size rle_repeat_count prev_code_size symbols bl_freqs bl_symbols
+           ; incr rle_z_count
+           ; if !rle_z_count == 138 then rle_zero_code_size rle_z_count symbols bl_freqs bl_symbols )
+      else ( rle_zero_code_size rle_z_count symbols bl_freqs bl_symbols
+           ; if code_size != !prev_code_size
+             then ( rle_prev_code_size rle_repeat_count prev_code_size symbols bl_freqs bl_symbols
+                  ; bl_freqs.(code_size) <- bl_freqs.(code_size) + 1
+                  ; Fmt.epr "bl_freqs[%3d]++\n%!" code_size
+                  ; Fmt.epr "bl_symbols[%3d] = %3d\n%!" !symbols code_size
+                  ; bl_symbols.(!symbols) <- code_size
+                  ; incr symbols )
+             else if ( incr rle_repeat_count ; !rle_repeat_count == 6 )
+             then ( rle_prev_code_size rle_repeat_count prev_code_size symbols bl_freqs bl_symbols )
+           ) ;
+      prev_code_size := code_size
+    done ;
 
-      try
-        if !count < !max_count && !curlen == !nextlen
-        then raise_notrace Continue
-        else if !count < !min_count
-        then bl_freqs.(!curlen) <- bl_freqs.(!curlen) + !count
-        else if !curlen != 0
-        then ( if !curlen != !prevlen then bl_freqs.(!curlen) <- bl_freqs.(!curlen) + 1
-             ; bl_freqs.(_rep_3_6) <- bl_freqs.(_rep_3_6) + 1 )
-        else if !count <= 10
-        then bl_freqs.(_repz_3_10) <- bl_freqs.(_repz_3_10) + 1
-        else bl_freqs.(_repz_11_138) <- bl_freqs.(_repz_11_138) + 1 ;
+    if !rle_repeat_count != 0
+    then rle_prev_code_size rle_repeat_count prev_code_size symbols bl_freqs bl_symbols
+    else rle_zero_code_size rle_z_count symbols bl_freqs bl_symbols ;
 
-        count := 0 ;
-        prevlen := !curlen ;
-
-        if !nextlen == 0
-        then ( max_count := 138 ; min_count := 3 )
-        else if !curlen = !nextlen
-        then ( max_count := 6 ; min_count := 3 )
-        else ( max_count := 7 ; min_count := 4 )
-      with Continue -> ()
-    done
+    !symbols
 
   let code code lookup = lookup.Lookup.t.(code)
   let bits code len = (len lsl _max_bits) lor code
@@ -1712,51 +1901,97 @@ module N = struct
     res.(256) <- 1 ; res
 
   let succ_literal literals chr =
-    literals.(Char.code chr) <- literals.(Char.code chr) + 1
+    literals.(Char.code chr) <- min (literals.(Char.code chr) + 1) 0xffff
   let succ_length literals length =
     assert (length >= 3 && length <= 255 + 3) ;
-    literals.(256 + 1 + _length.(length - 3)) <- literals.(256 + 1 + _length.(length - 3)) + 1
+    literals.(256 + 1 + _length.(length - 3)) <- min (literals.(256 + 1 + _length.(length - 3)) + 1) 0xffff
+
+  let reset_literals literals =
+    Array.fill literals 0 (2 * _l_codes + 1) 0 ;
+    literals.(256) <- 1
 
   let make_distances () = Array.make (2 * _d_codes + 1) 0
 
   let succ_distance distances distance =
     assert (distance >= 1 && distance <= 32767 + 1) ;
-    distances.(_distance (pred distance)) <- distances.(_distance (pred distance)) + 1
+    distances.(_distance (pred distance)) <- min (distances.(_distance (pred distance)) + 1) 0xffff
 
-  let bl_tree ltree dtree ~bl_count =
-    let bl_freqs = Array.make (2 * _bl_codes + 1) 0 in
-    T.scan ltree.T.lengths ltree.T.max_code ~bl_freqs ;
-    T.scan dtree.T.lengths dtree.T.max_code ~bl_freqs ;
+  let reset_distances distances =
+    Array.fill distances 0 (2 * _d_codes + 1) 0
 
-    let bltree = T.make ~length:_bl_codes ~max_length:7 bl_freqs ~bl_count in
+  let bl_tree ltree dtree =
+    let bl_freqs = Array.make _bl_codes 0 in
+    let bl_unpacks = Array.make (_l_codes + _d_codes) 0 in
+    let bl_symbols = Array.make (_l_codes + _d_codes) 0 in
+
+    Fmt.epr "hlit: %d, hdst: %d\n%!" ltree.T.max_code dtree.T.max_code ;
+
+    Array.blit ltree.T.lengths 0 bl_unpacks 0 ltree.T.max_code ;
+    Array.blit dtree.T.lengths 0 bl_unpacks ltree.T.max_code dtree.T.max_code ;
+
+    let symbols = T.scan_and_make
+      bl_unpacks
+      (ltree.T.max_code + dtree.T.max_code)
+      ~bl_freqs
+      ~bl_symbols in
+
+    for i = 0 to _bl_codes - 1 do Fmt.epr "bl_freqs[%d] = %d\n%!" i bl_freqs.(i) done ;
+
+    let bl_tree = T.make ~length:_bl_codes ~max_length:7 bl_freqs in
     (* XXX(dinosaure): [T.make] needs [max_length] to avoid generation of a bad bltree (limited to 7 bits with extra). *)
-    let max_blindex = ref (_bl_codes - 1) in
-    let exception Break in
+    let well_formed_bl_symbols = Array.make symbols 0 in
 
-    ( try while !max_blindex >= 3 do
-          if bltree.T.lengths.(zigzag.(!max_blindex)) <> 0
-          then raise_notrace Break ;
-          decr max_blindex
-        done
-      with Break -> () ) ;
+    let index = ref 0 in
 
-    !max_blindex, bltree
+    while !index < symbols do
+      let code = bl_symbols.(!index) in
+      let len, v = Lookup.get bl_tree.T.tree code in
+      well_formed_bl_symbols.(!index) <- (len lsl _max_bits) lor v ; incr index ;
+      Fmt.epr "cd %3d v %3d l %3d\n%!" code v len ;
+      if code >= 16
+      then ( let len = match code - 16 with 0 -> 2 | 1 -> 3 | 2 -> 7 | _ -> assert false in
+             Fmt.epr "cd v %3d l %3d\n%!" bl_symbols.(!index) len ;
+             well_formed_bl_symbols.(!index) <- (len lsl _max_bits) lor bl_symbols.(!index) ; incr index )
+    done ;
+
+    bl_tree, well_formed_bl_symbols
 
   let dynamic_of_frequencies
     : literals:int array -> distances:int array -> dynamic
     = fun ~literals:lit_freqs ~distances:dst_freqs ->
-    let bl_count = Array.make (_max_bits + 1) 0 in
-    let ltree = T.make ~length:_l_codes lit_freqs ~bl_count in
-    let dtree = T.make ~length:_d_codes dst_freqs ~bl_count in
-    let max_blindex, bltree = bl_tree ltree dtree ~bl_count in
-    let bl_symbols = Array.make (_l_codes + _d_codes) 0 in
-    let i = T.symbols 0 ltree.T.lengths ltree.T.max_code ~bltree ~bl_symbols in
-    let i = T.symbols i dtree.T.lengths dtree.T.max_code ~bltree ~bl_symbols in
-    let bl_symbols = Array.sub bl_symbols 0 i in
+    let ltree = T.make ~length:_l_codes lit_freqs in
 
-    { h_lit= ltree.T.max_code + 1
-    ; h_dst= dtree.T.max_code + 1
-    ; h_len= max_blindex + 1
+    let max_code =
+      let exception Break in
+      let count = ref 286 in
+      ( try while !count > 257 do if ltree.T.lengths.(!count - 1) != 0 then raise_notrace Break ; decr count done
+        with Break -> () ) ; !count in
+    let ltree = { ltree with max_code } in
+
+    let dtree = T.make ~length:_d_codes dst_freqs in
+
+    let max_code =
+      let exception Break in
+      let count = ref 30 in
+      ( try while !count > 1 do if dtree.T.lengths.(!count - 1) != 0 then raise_notrace Break ; decr count done
+        with Break -> () ) ; !count in
+    let dtree = { dtree with max_code } in
+
+    let bltree, bl_symbols = bl_tree ltree dtree in
+
+    let max_code =
+      let exception Break in
+      let count = ref 18 in
+      ( try while !count >= 0 do if bltree.T.lengths.(zigzag.(!count)) != 0 then raise_notrace Break ; decr count done
+        with Break -> () ) ; max 4 (!count + 1) in
+
+    Fmt.epr "hclen: %d\n%!" max_code ;
+
+    let bltree = { bltree with max_code } in
+
+    { h_lit= ltree.T.max_code
+    ; h_dst= dtree.T.max_code
+    ; h_len= bltree.T.max_code
     ; bltree
     ; ltree
     ; dtree
@@ -1896,6 +2131,7 @@ module N = struct
       then encode_huffman dynamic k e
       else
         let k e = go (succ rank) e in
+        Fmt.epr "blcode %3d 3\n%!" dynamic.bltree.T.lengths.(zigzag.(rank)) ;
         c_bits dynamic.bltree.T.lengths.(zigzag.(rank)) 3 k e in
     go 0 e
 
@@ -1964,12 +2200,14 @@ module N = struct
     let k_ok e = e.k <- encode ; `Ok in
     let k_nw e = e.k <- block write ; `Block in
 
-    let emit e =
+    let rec emit e =
       if !bits >= 16
-      then ( unsafe_set_uint16 e.o !o_pos !hold
+      then ( Fmt.epr "EMIT (%d)\n%!" !bits
+           ; unsafe_set_uint16 e.o !o_pos !hold
            ; hold := !hold lsr 16
            ; bits := !bits - 16
-           ; o_pos := !o_pos + 2 ) in
+           ; o_pos := !o_pos + 2
+           ; emit e ) in
 
     let ltree, dtree = match e.blk with
       | { kind= Dynamic dynamic; _ } ->
@@ -1978,8 +2216,12 @@ module N = struct
         _static_ltree, _static_dtree
       | _ -> assert false in
 
+    Fmt.epr "LOOP\n%!" ;
+
     try while e.o_max - !o_pos + 1 > 1 && not (B.is_empty e.b) do
         let cmd = B.peek_exn e.b in
+
+        Fmt.epr "CMD BITS: %d\n%!" !bits ;
 
         if not (exists (B.code cmd) e.blk)
         then raise_notrace Leave ;
@@ -1995,6 +2237,7 @@ module N = struct
 
           hold := (v lsl !bits) lor !hold ;
           bits := !bits + len ;
+          assert (!bits < 64) ;
           emit e
         | false ->
           let off, len = cmd land 0xffff, (cmd lsr 16) land 0x1ff in
@@ -2011,6 +2254,8 @@ module N = struct
           let len3, v3 = _extra_dbits.(code), off - _base_dist.(code) in
           (* len3_max: 13 *)
 
+          let before = !bits in
+
           hold :=
                   (v3 lsl (!bits + len0 + len1 + len2))
               lor (v2 lsl (!bits + len0 + len1))
@@ -2018,6 +2263,8 @@ module N = struct
               lor (v0 lsl !bits)
               lor !hold ;
           bits := !bits + len0 + len1 + len2 + len3 ;
+          if !bits >= 64 then Fmt.epr "BEFORE: %d, NOW: %d\n" before !bits ;
+          assert (!bits < 64) ;
           (* len_max: 48 *)
           emit e
       done ;

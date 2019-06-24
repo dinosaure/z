@@ -3,7 +3,7 @@ let zlib_header = Z.bigstring_create 2
 let w = Z.bigstring_create Z.Window.max
 let o = Z.bigstring_create Z.io_buffer_size
 let i = Z.bigstring_create Z.io_buffer_size
-let q = Z.B.create 4096
+let q = Z.B.create 16384
 
 let run_inflate () =
   let decoder = Z.M.decoder `Manual ~o ~w in
@@ -15,6 +15,8 @@ let run_inflate () =
       let len = Z.io_buffer_size - Z.M.dst_rem decoder in
       Bs.bigstring_output Unix.stdout o 0 len ; Z.M.flush decoder ; go ()
     | `Malformed err ->
+      let len = Z.io_buffer_size - Z.M.dst_rem decoder in
+      Bs.bigstring_output Unix.stdout o 0 len ; Z.M.flush decoder ;
       Fmt.epr "%s.\n%!" err ; `Error err
     | `End ->
       let len = Z.io_buffer_size - Z.M.dst_rem decoder in
@@ -46,6 +48,8 @@ let run_deflate () =
     | `Flush ->
       Fmt.epr ">>>> need to flush queue.\n%!" ;
       kind := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state)) ;
+      Z.N.reset_literals (Z.L.literals state) ;
+      Z.N.reset_distances (Z.L.distances state) ;
       encode @@ Z.N.encode encoder (`Block { Z.N.kind= !kind; last= false; })
   and encode = function
     | `Partial ->
