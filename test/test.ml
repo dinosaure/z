@@ -843,6 +843,93 @@ let tree_rfc5322_corpus () =
   Alcotest.(check (pair int int)) "literal 6" (10, 0x35f) (len_6, code_6) ;
   Alcotest.(check (pair int int)) "eob" (15, 0x6fff) (len_eob, code_eob)
 
+let w0 = Z.bigstring_create Z.Window.max
+let w1 = Z.bigstring_create Z.Window.max
+let s = Z.bigstring_create Z.io_buffer_size
+let o = Z.bigstring_create Z.io_buffer_size
+let q = Z.B.create (2 * 2 * 4096)
+let b = Buffer.create 4096
+
+let compress_and_uncompress ic =
+  let state = Z.L.state (`Channel ic) ~w:w0 ~q in
+  let kind = ref Z.N.Fixed in
+  let encoder = Z.N.encoder `Manual ~q in
+  let decoder = Z.M.decoder `Manual ~w:w1 ~o in
+
+  Buffer.clear b ;
+  Z.B.reset q ;
+  Z.N.dst encoder s 0 Z.io_buffer_size ;
+
+  let rec partial k = function
+    | `Await ->
+      k @@ Z.N.encode encoder `Await
+    | `End ->
+      for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
+      do Buffer.add_char b (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done
+    | `Flush ->
+      for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
+      do Buffer.add_char b (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done ;
+      Z.M.flush decoder ;
+      Z.N.dst encoder s 0 Z.io_buffer_size ;
+      partial k @@ Z.M.decode decoder
+    | `Malformed err ->
+      let contents = Buffer.contents b in
+      Fmt.epr "@[<hov>%a@]\n%!" (Hxd_string.pp Hxd.O.default) contents ;
+      invalid_arg err
+  and compress () = match Z.L.compress state with
+    | `Await -> assert false
+    | `End ->
+      Z.B.push_exn q Z.B.eob ;
+      pending @@ Z.N.encode encoder (`Block { Z.N.kind= Z.N.Fixed; last= true; })
+    | `Flush ->
+      kind := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state)) ;
+      encode @@ Z.N.encode encoder (`Block { Z.N.kind= !kind; last= false; })
+  and encode = function
+    | `Partial ->
+      let len = Z.io_buffer_size - Z.N.dst_rem encoder in
+      Z.M.src decoder s 0 len ;
+      partial encode @@ Z.M.decode decoder
+    | `Ok -> compress ()
+    | `Block ->
+      kind := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state)) ;
+      encode @@ Z.N.encode encoder (`Block { Z.N.kind= !kind; last= false; })
+  and pending = function
+    | `Partial ->
+      let len = Z.io_buffer_size - Z.N.dst_rem encoder in
+      Z.M.src decoder s 0 len ; Fmt.epr ">>> emit %d byte(s)\n%!" len ;
+      partial pending @@ Z.M.decode decoder
+    | `Ok -> last @@ Z.N.encode encoder `Flush
+    | `Block -> assert false
+  and last = function
+    | `Partial ->
+      let len = Z.io_buffer_size - Z.N.dst_rem encoder in
+      Z.M.src decoder s 0 len ;
+      partial pending @@ Z.M.decode decoder
+    | `Ok -> partial pending @@ Z.M.decode decoder
+    | `Block -> assert false in
+
+  compress () ; Pervasives.seek_in ic 0 ;
+  let contents = Buffer.contents b in
+
+  Fmt.epr "@[<hov>%a@]\n%!" (Hxd_string.pp Hxd.O.default) contents ;
+
+  let rec slow_compare pos =
+    match input_char ic with
+    | chr ->
+      if pos >= String.length contents then Fmt.invalid_arg "Reach end of contents" ;
+      if contents.[pos] <> chr
+      then Fmt.invalid_arg "Contents differ at %08x\n%!" pos ; slow_compare (succ pos)
+    | exception End_of_file ->
+      if pos <> String.length contents
+      then Fmt.invalid_arg "Lengths differ: (contents: %d, file: %d)" (String.length contents) pos in
+
+  slow_compare 0
+
+let test_corpus filename =
+  Alcotest.test_case filename `Quick @@ fun () ->
+  let ic = open_in Filename.(concat "corpus" filename) in
+  compress_and_uncompress ic ; close_in ic
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -891,4 +978,19 @@ let () =
               ; lz77_3 ()
               ; lz77_4 ()
               ; lz77_corpus_rfc5322 () ]
+    ; "calgary", [ test_corpus "bib"
+                 ; test_corpus "rfc5322.txt"
+                 ; test_corpus "book1"
+                 ; test_corpus "book2"
+                 ; test_corpus "geo"
+                 ; test_corpus "news"
+                 ; test_corpus "obj1"
+                 ; test_corpus "obj2"
+                 ; test_corpus "paper1"
+                 ; test_corpus "paper2"
+                 ; test_corpus "pic"
+                 ; test_corpus "progc"
+                 ; test_corpus "progl"
+                 ; test_corpus "progp"
+                 ; test_corpus "trans" ]
     ; "hang", [ hang0 () ] ]
