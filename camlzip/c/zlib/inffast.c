@@ -110,13 +110,14 @@ unsigned start;         /* inflate()'s starting value for strm->avail_out */
         here = lcode[hold & lmask];
       dolen:
         op = (unsigned)(here.bits);
+        int v = hold & ((1 << here.bits) - 1);
         hold >>= op;
         bits -= op;
         op = (unsigned)(here.op);
         if (op == 0) {                          /* literal */
             Tracevv((stderr, here.val >= 0x20 && here.val < 0x7f ?
-                    "inflate:         literal '%c'\n" :
-                    "inflate:         literal 0x%02x\n", here.val));
+                    "inflate:         literal '%c' (c: %4x, l: %3d)\n" :
+                    "inflate:         literal 0x%02x (c: %4x, l: %3d)\n", here.val, v, here.bits));
             *out++ = (unsigned char)(here.val);
         }
         else if (op & 16) {                     /* length base */

@@ -140,13 +140,13 @@ local void init_block     OF((deflate_state *s));
 local void pqdownheap     OF((deflate_state *s, ct_data *tree, int k));
 local void gen_bitlen     OF((deflate_state *s, tree_desc *desc));
 local void gen_codes      OF((ct_data *tree, int max_code, ushf *bl_count));
-local void build_tree     OF((deflate_state *s, tree_desc *desc));
+void build_tree     OF((deflate_state *s, tree_desc *desc));
 local void scan_tree      OF((deflate_state *s, ct_data *tree, int max_code));
 local void send_tree      OF((deflate_state *s, ct_data *tree, int max_code));
-local int  build_bl_tree  OF((deflate_state *s));
-local void send_all_trees OF((deflate_state *s, int lcodes, int dcodes,
+int  build_bl_tree  OF((deflate_state *s));
+void send_all_trees OF((deflate_state *s, int lcodes, int dcodes,
                               int blcodes));
-local void compress_block OF((deflate_state *s, const ct_data *ltree,
+void compress_block OF((deflate_state *s, const ct_data *ltree,
                               const ct_data *dtree));
 local int  detect_data_type OF((deflate_state *s));
 local unsigned bi_reverse OF((unsigned value, int length));
@@ -181,9 +181,9 @@ local void gen_trees_header OF((void));
  * IN assertion: length <= 16 and value fits in length bits.
  */
 #ifdef ZLIB_DEBUG
-local void send_bits      OF((deflate_state *s, int value, int length));
+void send_bits      OF((deflate_state *s, int value, int length));
 
-local void send_bits(s, value, length)
+void send_bits(s, value, length)
     deflate_state *s;
     int value;  /* value to send */
     int length; /* number of bits */
@@ -612,7 +612,7 @@ local void gen_codes (tree, max_code, bl_count)
  *     and corresponding code. The length opt_len is updated; static_len is
  *     also updated if stree is not null. The field max_code is set.
  */
-local void build_tree(s, desc)
+void build_tree(s, desc)
     deflate_state *s;
     tree_desc *desc; /* the tree descriptor */
 {
@@ -796,7 +796,7 @@ local void send_tree (s, tree, max_code)
  * Construct the Huffman tree for the bit lengths and return the index in
  * bl_order of the last bit length code to send.
  */
-local int build_bl_tree(s)
+int build_bl_tree(s)
     deflate_state *s;
 {
     int max_blindex;  /* index of last bit length code of non zero freq */
@@ -831,7 +831,7 @@ local int build_bl_tree(s)
  * lengths of the bit length codes, the literal tree and the distance tree.
  * IN assertion: lcodes >= 257, dcodes >= 1, blcodes >= 4.
  */
-local void send_all_trees(s, lcodes, dcodes, blcodes)
+void send_all_trees(s, lcodes, dcodes, blcodes)
     deflate_state *s;
     int lcodes, dcodes, blcodes; /* number of codes for each tree */
 {
@@ -1061,7 +1061,7 @@ int ZLIB_INTERNAL _tr_tally (s, dist, lc)
 /* ===========================================================================
  * Send the block data compressed using the given Huffman trees
  */
-local void compress_block(s, ltree, dtree)
+void compress_block(s, ltree, dtree)
     deflate_state *s;
     const ct_data *ltree; /* literal tree */
     const ct_data *dtree; /* distance tree */
