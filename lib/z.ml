@@ -1964,12 +1964,13 @@ module N = struct
     let k_ok e = e.k <- encode ; `Ok in
     let k_nw e = e.k <- block write ; `Block in
 
-    let emit e =
+    let rec emit e =
       if !bits >= 16
       then ( unsafe_set_uint16 e.o !o_pos !hold
            ; hold := !hold lsr 16
            ; bits := !bits - 16
-           ; o_pos := !o_pos + 2 ) in
+           ; o_pos := !o_pos + 2
+           ; emit e ) in
 
     let ltree, dtree = match e.blk with
       | { kind= Dynamic dynamic; _ } ->
