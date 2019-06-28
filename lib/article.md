@@ -329,9 +329,9 @@ In fact, if we want to encode `[ Literal 'a'; Literal 'b' ]`, we will not try to
 make a dictionary which will contains the 256 possibilities of a byte but we
 will only make a dictionary from frequencies which contains only `'a'` and
 `'b'`. By this way, we can reach a case where the queue contains an _opcode_
-which can not be encoded by the _already decided_ [_huffman_
-coding][huffman-coding] - remember, the DYNAMIC block __starts__ with the
-dictionary.
+(like `Literal 'c'`) which can not be encoded by the _already decided_
+[_huffman_ coding][huffman-coding] - remember, the DYNAMIC block __starts__ with
+the dictionary.
 
 An other point is about inputs. The encoder expects, of course, contents from
 the shared queue but it wants from the user the way to encode contents: which
@@ -381,7 +381,7 @@ behavior.
 
 Because we decided to split encoder and compressor, the idea of the _flush mode_
 does not exists anymore where the user explicitly needs to give to the encoder
-what we want (make a new block? which block? keep frequencies?). So we broke the
+what he want (make a new block? which block? keep frequencies?). So we broke the
 black-box. But, as we said, it was possible mostly because we can abstract
 safely the shared queue between the compressor and the encoder.
 
@@ -416,7 +416,7 @@ First at all, optimisation should be done at the end of the developement
 process. As @Drup said, first you must have something which works, then you can
 think about optimization. In fact, an optimization pass can change a lot your
 code, so you need to keep a state of your project where you can trust on it.
-This is assumption will help you as a comparison point about benchmark first,
+This assumption will help you as a comparison point about benchmark first,
 and certainly about expected behaviors.
 
 In others words, your stable implementation will be the oracle for your
@@ -676,7 +676,7 @@ The output assembly is:
         movq    %rbx, %rax
 ```
 
-where a C code produce:
+where idiomatically the same C code produce:
 
 ```asm
 .L2:
@@ -711,7 +711,7 @@ hold := Nativeint.logor !hold Nativeint.(shift_left (of_int (unsafe_get_uint8 d.
 ```
 
 And, at the end, about the inflator, we won 0.5Mb/s so, it's not very relevant
-to do systematically this optimization. Especialy that tha gain is not very
+to do systematically this optimization. Especialy that the gain is not very
 big. But this case show a more higher problem: readability.
 
 In fact, we can optimize more and more a code (OCaml or C) but we lost, step by
@@ -725,9 +725,80 @@ and super fast one.
 
 ### Exception
 
+If you remember our article about the release of `base64`, we talked a little
+bit about exception and used them as a _jump_. In fact, it's pretty common for
+an OCaml developper to break the control-flow with an exception. Behind this
+common design/optimization, it's about calling convention.
+
+Indeed, choose the _jump_ word to describe OCaml exception is not the best where
+we don't use `setjmp`/`longjmp`.
+
+In the details, when you start a code with a `try .. with`, OCaml saves a _trap_
+in the stack which contains informations about the `with`, the catcher. Then,
+when you `raise`, you jump directly to this trap and can just discard several
+stack frames (and, by this way, you did not check each return codes).
+
+In several places and mostly in the _hot-loop_, we use this _pattern_. However,
+it completely breaks the control flow and can be error-prone.
+
+To limit errors and because this pattern is usual, we prefer to use a _local_
+exception which will be used only inside the function. By this way, we enforce
+the fact that exception should not (and can not) be catched by something else
+than the function itself.
+
+```ocaml
+    let exception Break in
+
+    ( try while !max >= 1 do
+          if bl_count.(!max) != 0 then raise_notrace Break
+        ; decr max done with Break -> () ) ;
+```
+
 ### Unroll
 
+When we showed the optimization done by `gcc` when the string is aligned, `gcc`
+did another optimization. Instead to set byte per byte the string, it decides to
+update it 4 bytes per 4 bytes.
+
+This kind of this optimization is an _unroll_ and we did it in `decompress`.
+Indeed, when we reach the _copy_ _opcode_ emitted by the [lz77][lz77]
+compressor, we want to _blit_ _length_ byte(s) from a source to the outputs
+flow. It can appear that this `memcpy` can be optimized to copy 4 bytes per 4
+bytes - 4 bytes is generally a good idea where it's the size of an `int32` and
+should fit under any architecture.
+
+```ocaml
+let blit src src_off dst dst_off =
+  if dst_off - src_off < 4
+  then slow_blit src src_off dst dst_off
+  else
+    let len0 = len land 3 in
+    let len1 = len asr 2 in
+
+    for i = 0 to len1 - 1
+    do
+      let i = i * 4 in
+      let v = unsafe_get_uint32 src (src_off + i) in
+      unsafe_set_uint32 dst (dst_off + i) v ;
+    done ;
+
+    for i = 0 to len0 - 1
+    do
+      let i = len1 * 4 + i in
+      let v = unsafe_get_uint8 src (src_off + i) in
+      unsafe_set_uint8 dst (dst_off + i) v ;
+    done
+
+```
+
+In this code, at the beginning, we copy 4 bytes per 4 bytes and if `len` is not
+a multiple of 4, we start the _trailing_ loop to copy byte per byte then. In
+this context, OCaml can _unbox_ `int32` and use registers. So this function does
+not deal with the heap, and by this way, with the garbage collector.
+
 ### _hot-loop_
+
+### _caml\_modify_
 
 ### Conclusion
 
