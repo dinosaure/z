@@ -754,6 +754,39 @@ than the function itself.
         ; decr max done with Break -> () ) ;
 ```
 
+This code above produce this assembly code:
+
+```asm
+.L105:
+        pushq   %r14
+        movq    %rsp, %r14
+.L103:
+        cmpq    $3, %rdi
+        jl      .L102
+        movq    -4(%rbx,%rdi,4), %rsi
+        cmpq    $1, %rsi
+        je      .L104
+        movq    %r14, %rsp
+        popq    %r14
+        ret
+.L104:
+        addq    $-2, %rdi
+        movq    %rdi, 16(%rsp)
+        jmp     .L103
+```
+
+Where the `ret` is the `raise_notrace Break`. A `raise_notrace` is needed, otherwise, you will see:
+
+```asm
+        movq    caml_backtrace_pos@GOTPCREL(%rip), %rbx
+        xorq    %rdi, %rdi
+        movl    %edi, (%rbx)
+        call    caml_raise_exn@PLT
+```
+
+Insted the `ret` assembly code. Indeed, in this case, we need to store where we
+raised the exception.
+
 ### Unroll
 
 When we showed the optimization done by `gcc` when the string is aligned, `gcc`
@@ -788,7 +821,6 @@ let blit src src_off dst dst_off =
       let v = unsafe_get_uint8 src (src_off + i) in
       unsafe_set_uint8 dst (dst_off + i) v ;
     done
-
 ```
 
 In this code, at the beginning, we copy 4 bytes per 4 bytes and if `len` is not
@@ -796,7 +828,46 @@ a multiple of 4, we start the _trailing_ loop to copy byte per byte then. In
 this context, OCaml can _unbox_ `int32` and use registers. So this function does
 not deal with the heap, and by this way, with the garbage collector.
 
+#### Results
+
+At the end, we won 10Mb/s about the inflator. The `blit` function is a main
+function about the _inflation_ from the window to the outputs flow. As the
+specialization on the `min` function, this is one of the biggest optimization on
+`decompress`.
+
 ### _hot-loop_
+
+A common design about decompression (but we can find it on hash implementation
+too), it's about a _hot-loop_. An _hot-loop_ is mainly a loop on the most common
+operation in your process. In the context of `decompress`, the _hot-loop_ is
+about a repeated translation from bit-sequence to byte(s) from the inputs flow
+to the outputs flow and the window.
+
+The main idea behind the _hot-loop_ is to initialize all informations needed for
+the translation before to start the _hot-loop_. Then, it's mostly an imperative
+loop with a _pattern-matching_ which corresponds to the current state of the
+global computation.
+
+In OCaml, we can take this opportunity where we can use `int ref` (or `nativeint
+ref`), and then, they will be translated into registers (which is the fastest
+area to store something).
+
+Another deal inside the _hot-loop_ is to avoid any allocation - and it's why we
+talk about `int` or `nativeint`. Indeed, a more complex structure like an option
+will add a blocker to the garbage collection (a call to `caml_call_gc`).
+
+Of course, this kind of design is completely wrong if we think in a functional
+way. However, this is the (biggest?) advantage of OCaml: hidden this ugly/hacky
+part inside a functional interface.
+
+In the API, we talked about a state which represents the _inflation_ (or the
+_deflation_). At the beginning, the goal is to store into some references
+essentials values like the position into the inputs flow, bits available, etc.
+Then, we launch the _hot-loop_ and at the end, we re-store values into the
+state.
+
+So we keep the optimal design about _inflation_ and the functional way outside
+the _hot-loop_.
 
 ### _caml\_modify_
 
