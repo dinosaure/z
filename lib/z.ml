@@ -1,5 +1,28 @@
 let () = Printexc.record_backtrace true
 
+(* Introduction about design.
+
+   All the library is done here. The choice to have only one file is to take
+   care about all details of implementations as an implementor and as a
+   compiler. So, we should split this code into several files, but we should
+   lost something about performances if we do that.
+
+   The prelude is about some unsafe/safe functions and constants. You can
+   randonly change them to understand what is going on below then.
+
+   We start then with [Lookup] and [Window] module, both are used by inflator
+   which knows the structure of them - I mean, they are not protectred by an
+   abstract type and a signature - they should.
+
+   Then, we have the inflator.
+
+   Next, we have a [T] module and a [B] module. [T] is to make huffman tree
+   (some routines, mostly about algorithms). [B] is a queue as [ke]. Both are
+   used by the deflator which knows their structures too.
+
+   Finally, the encoder (according RFC1951) and at the end, the LZ77 compressor.
+   Both are defined as the deflator (in terms of [zlib]). *)
+
 (* XXX(dinosaure): prelude. *)
 
 [@@@warning "-32-34-37"]
@@ -14,9 +37,9 @@ let bigstring_blit a b = Bigarray.Array1.blit a b [@@inline]
 let bigstring_to_string = Bigstringaf.to_string
 let bigstring_of_string x = Bigstringaf.of_string ~off:0 ~len:(String.length x) x
 
-external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
-external unsafe_get_char : bigstring -> int -> char = "%caml_ba_ref_1"
-external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
+external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_unsafe_ref_1"
+external unsafe_get_char : bigstring -> int -> char = "%caml_ba_unsafe_ref_1"
+external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_unsafe_set_1"
 external unsafe_get_uint16 : bigstring -> int -> int = "%caml_bigstring_get16"
 external unsafe_set_uint16 : bigstring -> int -> int -> unit = "%caml_bigstring_set16"
 external swap : int -> int = "%bswap16"
@@ -213,10 +236,6 @@ module Lookup = struct
   let get t i =
     let v = t.t.(i) in v lsr _max_bits, v land mask (* allocation *)
   [@@inline]
-
-  let pp ppf t =
-    Fmt.pf ppf "{ @[<hov>t = @[<hov>%a@];@ m = %x;@ l = %d;@] }"
-      Fmt.(Dump.array int) t.t t.m t.l
 end
 
 let _static_ltree =
@@ -314,12 +333,6 @@ module Heap = struct
   let take = function
     | None -> raise_notrace Empty
     | Node (p, e, _, _) as queue -> (p, e, remove queue)
-
-  let rec pp pp_data ppf = function
-    | None -> Fmt.string ppf "<none>"
-    | Node (p, e, l, r) ->
-      Fmt.pf ppf "(Node (priority: %d, e: %a, l: %a, r: %a))"
-        p pp_data e (Fmt.hvbox (pp pp_data)) l (Fmt.hvbox (pp pp_data)) r
 end
 
 module Window = struct
@@ -515,13 +528,6 @@ module M = struct
   and jump = Length | Extra_length | Distance | Extra_distance | Write
   and ret = Await | Flush | End | K | Malformed of string
 
-  let pp_jump ppf = function
-    | Length -> Fmt.string ppf "length"
-    | Extra_length -> Fmt.string ppf "extra-length"
-    | Distance -> Fmt.string ppf "distance"
-    | Extra_distance -> Fmt.string ppf "extra-distance"
-    | Write -> Fmt.string ppf "write"
-
   let malformedf fmt = Fmt.kstrf (fun s -> Malformed s) fmt
 
   (* End of input [eoi] is signalled by [d.i_pos = 0] and [d.i_len = min_int]
@@ -634,7 +640,7 @@ module M = struct
        ; 0x17; 0x97; 0x57; 0xD7; 0x37; 0xB7; 0x77; 0xF7
        ; 0x0F; 0x8F; 0x4F; 0xCF; 0x2F; 0xAF; 0x6F; 0xEF
        ; 0x1F; 0x9F; 0x5F; 0xDF; 0x3F; 0xBF; 0x7F; 0xFF |]
-    in t.(bits)
+    in Array.unsafe_get t (bits land 0xff)
   [@@inline]
 
   let fixed_lit, fixed_dist =
@@ -1410,13 +1416,6 @@ module T = struct
     ; max_code : int
     ; tree : Lookup.t }
 
-  let pp_tree ppf t =
-    Fmt.pf ppf "{ @[<hov>lengths= @[<hov>%a@];@ \
-                         max_code= %d;@ \
-                         tree= @[<hov>%a@];@] }"
-      Fmt.(Dump.array int) t.lengths
-      t.max_code Lookup.pp t.tree
-
   let make ~length ?(max_length= _max_bits) freqs ~bl_count =
     let heap = Heap.make () in
     let depth = Array.make (2 * _l_codes + 1) 0 in
@@ -1685,25 +1684,9 @@ module N = struct
     ; h_len : int
     ; symbols : int array }
 
-  let pp_dynamic ppf d =
-    Fmt.pf ppf "{ @[<hov>ltree= @[<hov>%a@];@ \
-                         dtree= @[<hov>%a@];@ \
-                         bltree= @[<hov>%a@];@ \
-                         h_lit= %d;@ \
-                         h_dst= %d;@ \
-                         h_len= %d;@ \
-                symbols= @[<hov>%a@];@] }"
-      T.pp_tree d.ltree
-      T.pp_tree d.dtree
-      T.pp_tree d.bltree
-      d.h_lit d.h_dst d.h_len
-      Fmt.(Dump.array int) d.symbols
-
   type literals = int array
   type distances = int array
 
-  let pp_literals = Fmt.(Dump.array int)
-  let pp_distances = Fmt.(Dump.array int)
   external unsafe_literals_to_array : literals -> int array = "%identity"
   external unsafe_distances_to_array : distances -> int array = "%identity"
 
@@ -1828,8 +1811,6 @@ module N = struct
       (* TODO: check why we need [unsafe_chr]. *)
       e.o_pos <- 0 ; k e
 
-  let pp_chr = Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
-
   let rec c_byte byte k e =
     let rem = o_rem e in
     if rem < 1
@@ -1934,11 +1915,6 @@ module N = struct
               k e in
             c_byte (e.hold land 0xff) k e )
     else k e
-
-  let pp_code ppf = function
-    | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
-    | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d len:%d)" off len
-    | `End -> Fmt.string ppf "`End"
 
   let rec block k e = function
     | `Block block ->
@@ -2303,8 +2279,6 @@ module L = struct
   (* remaining bytes to read [s.i]. *)
   let i_rem s = s.i_len - s.i_pos + 1
   [@@inline]
-
-  let pp_chr = Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
 
   (* XXX(dinoaure): [lt] is not very safe! *)
 
