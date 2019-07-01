@@ -483,8 +483,6 @@ We have:
 ```
 
 ```asm
-camlMain__min_1003:
-        .cfi_startproc
 .L101:
         cmpq    %rbx, %rax
         jg      .L100
@@ -656,13 +654,13 @@ The output assembly is:
 ```asm
 .L105:
         movq    %rdi, %rcx
-        sarq    $1, %rcx
+        sarq    $1, %rcx     // b >> 1
         movq    (%rsp), %rax
-        sarq    $1, %rax
-        testq   %rcx, %rcx
+        sarq    $1, %rax     // a >> 1
+        testq   %rcx, %rcx   // b != 0
         je      .L107
         cqto
-        idivq   %rcx
+        idivq   %rcx         // a % b
         jmp     .L106
 .L107:
         movq    caml_backtrace_pos@GOTPCREL(%rip), %rax
@@ -671,8 +669,8 @@ The output assembly is:
         movq    caml_exn_Division_by_zero@GOTPCREL(%rip), %rax
         call    caml_raise_exn@PLT
 .L106:
-        salq    $1, %rdx
-        incq    %rdx
+        salq    $1, %rdx     // x << 1
+        incq    %rdx         // x + 1
         movq    %rbx, %rax
 ```
 
@@ -725,10 +723,10 @@ and super fast one.
 
 ### Exception
 
-If you remember our article about the release of `base64`, we talked a little
-bit about exception and used them as a _jump_. In fact, it's pretty common for
-an OCaml developper to break the control-flow with an exception. Behind this
-common design/optimization, it's about calling convention.
+If you remember our [article][base64] about the release of `base64`, we talked a
+little bit about exception and used them as a _jump_. In fact, it's pretty
+common for an OCaml developper to break the control-flow with an exception.
+Behind this common design/optimization, it's about calling convention.
 
 Indeed, choose the _jump_ word to describe OCaml exception is not the best where
 we don't use `setjmp`/`longjmp`.
@@ -761,21 +759,22 @@ This code above produce this assembly code:
         pushq   %r14
         movq    %rsp, %r14
 .L103:
-        cmpq    $3, %rdi
+        cmpq    $3, %rdi              // while !max >= 1
         jl      .L102
-        movq    -4(%rbx,%rdi,4), %rsi
-        cmpq    $1, %rsi
+        movq    -4(%rbx,%rdi,4), %rsi // bl_count,(!max)
+        cmpq    $1, %rsi              // bl_count.(!max) != 0
         je      .L104
         movq    %r14, %rsp
         popq    %r14
-        ret
+        ret                           // raise_notrace Break
 .L104:
-        addq    $-2, %rdi
+        addq    $-2, %rdi             // decr max
         movq    %rdi, 16(%rsp)
         jmp     .L103
 ```
 
-Where the `ret` is the `raise_notrace Break`. A `raise_notrace` is needed, otherwise, you will see:
+Where the `ret` is the `raise_notrace Break`. A `raise_notrace` is needed,
+otherwise, you will see:
 
 ```asm
         movq    caml_backtrace_pos@GOTPCREL(%rip), %rbx
@@ -784,7 +783,7 @@ Where the `ret` is the `raise_notrace Break`. A `raise_notrace` is needed, other
         call    caml_raise_exn@PLT
 ```
 
-Insted the `ret` assembly code. Indeed, in this case, we need to store where we
+Instead the `ret` assembly code. Indeed, in this case, we need to store where we
 raised the exception.
 
 ### Unroll
@@ -871,6 +870,188 @@ the _hot-loop_.
 
 ### _caml\_modify_
 
+One issue where we need to be considerate is about the call to
+`caml_modify`. In fact, for a complex data-structure like an `int array` or a
+`int option`( so, other than an integer or a float), values can move to the
+major heap.
+
+In this context, `caml_modify` is used to assign a new value into your mutable
+block. In this case, it is a bit slower than simple assignment but needed to
+ensure pointer correspondence between minor heap and major heap.
+
+With this OCaml code for example:
+
+```ocaml
+type t = { mutable v : int option }
+
+let f t v = t.v <- v
+```
+
+We produce this assembly:
+
+```asm
+camlExample__f_1004:
+        subq    $8, %rsp
+        movq    %rax, %rdi
+        movq    %rbx, %rsi
+        call    caml_modify@PLT
+        movq    $1, %rax
+        addq    $8, %rsp
+        ret
+```
+
+Where we see the call to `caml_modify` which will be take care about the
+assignment of `v` into `t.v`. This call is needed mostly because the type inner
+`t` is not an _immediate_ value like an integer. So, for many values in the
+_inflator_ and the _deflator_, we mostly use integers.
+
+Of course, at some points, we use `int array` and set them at one specific point
+of the _inflator_ - where we inflated the dictionary. However, the impact of
+`caml_modify` is not very clear where it is commonly pretty fast.
+
+At some point, however, it can be a real bottleneck in your computation and
+mostly depends how long your value lives in the heap. A little program (which is
+not very reproducible) can show that:
+
+```ocaml
+let t = Array.init (int_of_string Sys.argv.(1)) (fun _ -> Random.int 256)
+
+let pr fmt = Format.printf fmt
+
+type t0 = { mutable v : int option }
+type t1 = { v : int option }
+
+let f0 (t0 : t0) =
+  for i = 0 to Array.length t - 1
+  do let v = match t0.v, t.(i) with
+             | Some _ as v, _ -> v
+             | None, 5 -> Some i
+             | None, _ -> None in
+     t0.v <- v
+  done; t0
+
+let f1 (t1 : t1) =
+  let t1 = ref t1 in
+  for i = 0 to Array.length t - 1
+  do let v = match !t1.v, t.(i) with
+             | Some _ as v, _ -> v
+             | None, 5 -> Some i
+             | None, _ -> None in
+     t1 := { v }
+  done; !t1
+
+let () =
+  let t0 : t0 = { v= None } in
+  let t1 : t1 = { v= None } in
+  let time0 = Unix.gettimeofday () in
+  ignore (f0 t0) ;
+  let time1 = Unix.gettimeofday () in
+  ignore (f1 t1) ;
+  let time2 = Unix.gettimeofday () in
+
+  pr "f0: %f ns\n%!" (time1 -. time0) ;
+  pr "f1: %f ns\n%!" (time2 -. time1) ;
+
+  ()
+```
+
+In our bare-metal server, if you launch the program with 1000, the `f0`
+computation, even if it has `caml_modify` will be the fastest. However, if you
+launch the program with 1000000000, `f1` will be the fastest.
+
+```sh
+$ ./a.out 1000
+f0: 0.000006 ns
+f1: 0.000015 ns
+$ ./a.out 1000000000
+f0: 7.931782 ns
+f1: 5.719370 ns
+```
+
+#### About `decompress`
+
+At the beginning, our choice was made to have, as @dbuenzli does, mutable
+structure to represent state. Then, @yallop did a big patch to update it to an
+immutable state and we won 9Mb/s about _inflation_.
+
+However, the new version is more focus on the _hot-loop_ than before and it is 3
+times faster than before.
+
+As we said, the deal about `caml_modify` is not clear and depends a lot about
+how long your data lives in the heap and how many times you want to update it.
+If we localize `caml_modify` only on few places, it should be fine. But it still
+is one of the most complex question about (macro?) optimization.
+
+### Smaller representation
+
+At the end, we talk several times about integer, immediate values and so on.
+Indeed, type choosen to represent some values can impact a lot your
+performances.
+
+For example, about dictionary which associates bit-sequence (an integer) to the
+length of it __AND__ the byte can be represented by a: `(int * int) array`, or
+more idiomatically `{ len: int; byte: int; } array` (which is structurally the
+same).
+
+However, that means an allocation per bytes to represent any bytes possible.
+Extraction of it will need an allocation if `find : bits:int -> { len: int;
+byte: int; }` is not inlined as we said. And about memory, the array can be
+really _heavy_ in your heap.
+
+At this point, we used `spacetime` to show how many blocks we allocated for a
+common _inflation_ and we saw that we allocate a lot. The choice was made to use
+a smaller representation. Where `len` can not be upper than 15 according RFC
+1951 and when byte can represent only 256 possibilities (and should fit under
+one byte), we can decide to merge them into one integer (which can have, at
+least, 31 bits).
+
+```ocaml
+let static_literal_tree = [| (8, 12); (8, 140); (8, 76); ... |]
+let static_literal_tree = Array.map (fun (len, byte) -> (len lsl 8) lor byte) static_literal_tree
+```
+
+In the code above, we just translate the static dictionary (for a STATIC DEFLATE
+block) to a smaller representation where `len` will be the left part of the
+integer and the byte, the right part. Of course, it's really depends on what you
+want to store.
+
+Another point is about readability. However, [`cstruct-ppx`][cstruct-ppx] and
+[`bitstring`][bitstring] can help you about this specific point - `decompress`
+wants to depend only on OCaml.
+
 ### Conclusion
+
+Optimization __is specific__ on your task. Some points highlighted in this
+article should not fit under your assumptions but can let some ideas. As we
+said, all of these are possible because we completely assimilate what is `zlib`
+and has a clear vision of what we need and where we really should optimize (like
+`blit`).
+
+As your first project, this article can not help you a lot to optimize your code
+where it's mostly about _micro_-optimization under a specific context
+(_hot-loop_). But it helps you to understand what is really done by the
+compiler - which still is really interesting.
+
+All optimizations was done because we did a comparison point between the old
+implementation of `decompress` and `zlib` as oracles. Optimizations can change
+semantic of your code and you should systematically take care at any step about
+expected behaviors.
+
+At the end, we did not talk about benchmark which is another hard issue (compare
+with who? where? how?). For example, a global comparison between `zlib` and
+`decompress` is not very relevant in many ways - specially the garbage
+collector. It could be an another possible article!
+
+But what we want to say as a conclusion is about the predictability of the OCaml
+compiler. For sure, the compiler does not optimize a lot your code - but it sill
+produce realistic programs if we think about perfomances. For many cases, __you
+don't need__ to optimize your OCaml code. And the good point is about expected
+behavior.
+
+The mind-link between the OCaml and the assembly exists (much more than the C
+and the assembly sometimes where we let the compiler to optimize the code). The
+cool fact is to keep a mental-model about what is going on on your code easily
+without to be afraid by what the compiler produced. And, in some critical parts
+like [eqaf][eqaf], it's really needed.
 
 ## `decompress` at the end
