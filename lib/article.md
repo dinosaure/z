@@ -1055,3 +1055,30 @@ without to be afraid by what the compiler produced. And, in some critical parts
 like [eqaf][eqaf], it's really needed.
 
 ## `decompress` at the end
+
+[rfc1951]: https://tools.ietf.org/html/rfc1951
+[zlib]: https://zlib.net/
+[git]: https://git-scm.com/
+[ocaml-git]: https://github.com/mirage/ocaml-git/
+[zstd]: https://github.com/facebook/zstd
+[lz4]: https://github.com/lz4/lz4 
+[dune]: https://github.com/ocaml/dune
+[digestif]: https://github.com/mirage/digestif
+[esp32]: https://mirage.io/blog/2018-esp32-booting
+[uutf]: https://github.com/dbuenzli/uutf
+[jsonm]: https://github.com/dbuenzli/jsonm
+[xmlm]: https://github.com/dbuenzli/xmlm 
+[mirage-flow]: https://github.com/mirage/mirage-flow
+[rfc4880]: https://tools.ietf.org/html/rfc4880
+[huffman-coding]: https://zlib.net/feldspar.html
+[lz77]: https://en.wikipedia.org/wiki/LZ77_and_LZ78
+[lzwa]: https://en.wikipedia.org/wiki/Lempel%E2%80%93Ziv%E2%80%93Markov_chain_algorithm 
+[duff]: https://github.com/mirage/duff 
+[miniz]: https://github.com/richgel999/miniz
+[yes]: https://www.reddit.com/r/unix/comments/6gxduc/how_is_gnu_yes_so_fast/
+[deflate-flush]: https://www.bolet.org/~pornin/deflate-flush.html
+[gcc-strlen]: https://stackoverflow.com/a/55589634
+[jst-gc-bit]: https://blog.janestreet.com/what-is-gained-and-lost-with-63-bit-integers/
+[base64]: https://tarides.com/blog/2019-02-08-release-of-base64.html
+[cstruct-ppx]: https://github.com/mirage/ocaml-cstruct#ppx
+[bitstring]: https://bitbucket.org/thanatonauts/bitstring/src
