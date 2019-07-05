@@ -2463,3 +2463,59 @@ module L = struct
     ; b= q
     ; k= fill }
 end
+
+module Higher = struct
+  let compress ~w ~q ~i ~o refill flush =
+    let state = L.state `Manual ~w ~q in
+    let encoder = N.encoder `Manual ~q in
+    let kind = ref N.Fixed in
+
+    B.reset q ;
+    N.dst encoder o 0 (bigstring_length o) ;
+
+    let rec compress () = match L.compress state with
+      | `Await ->
+        let len = refill i in
+        L.src state i 0 len ; compress ()
+      | `Flush ->
+        let literals = L.literals state in
+        let distances = L.distances state in
+        kind := N.Dynamic (N.dynamic_of_frequencies ~literals ~distances) ;
+        encode (N.encode encoder (`Block { N.kind= !kind; last= false; }))
+      | `End ->
+        B.push_exn q B.eob ; pending (N.encode encoder (`Block { N.kind= N.Fixed; last= true; }))
+    and encode = function
+      | `Partial ->
+        let len = (bigstring_length o) - N.dst_rem encoder in
+        flush o len ; N.dst encoder o 0 (bigstring_length o) ; encode (N.encode encoder `Await)
+      | `Ok -> compress ()
+      | `Block ->
+        let literals = L.literals state in
+        let distances = L.distances state in
+        kind := N.Dynamic (N.dynamic_of_frequencies ~literals ~distances) ;
+        encode (N.encode encoder (`Block { N.kind= !kind; last= false; }))
+    and pending = function
+      | `Block -> assert false (* XXX(dinosaure): should never appear. *)
+      | `Partial ->
+        let len = (bigstring_length o) - N.dst_rem encoder in
+        flush o len ; N.dst encoder o 0 (bigstring_length o) ; pending (N.encode encoder `Await)
+      | `Ok -> () in
+
+    compress ()
+
+  let decompress ~w ~i ~o refill flush =
+    let decoder = M.decoder `Manual ~o ~w in
+
+    let rec decompress () = match M.decode decoder with
+      | `Await ->
+        let len = refill i in
+        M.src decoder i 0 len ; decompress ()
+      | `End ->
+        let len = bigstring_length o - M.dst_rem decoder in
+        if len > 0 then flush o len
+      | `Flush ->
+        let len = bigstring_length o - M.dst_rem decoder in
+        flush o len ; M.flush decoder ; decompress ()
+      | `Malformed err -> failwith err in
+    decompress ()
+end

@@ -143,3 +143,8 @@ module L : sig
   val compress : state -> decode
   val state : src -> w:bigstring -> q:B.t -> state
 end
+
+module Higher : sig
+  val compress : w:bigstring -> q:B.t -> i:bigstring -> o:bigstring -> (bigstring -> int) -> (bigstring -> int -> unit) -> unit
+  val decompress : w:bigstring -> i:bigstring -> o:bigstring -> (bigstring -> int) -> (bigstring -> int -> unit) -> unit
+end

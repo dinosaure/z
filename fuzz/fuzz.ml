@@ -1,4 +1,5 @@
 let w = Z.bigstring_create Z.Window.max
+let i = Z.bigstring_create Z.io_buffer_size
 let o = Z.bigstring_create Z.io_buffer_size
 let q = Z.B.create 4096
 
@@ -246,3 +247,44 @@ let () =
   Fmt.epr "Results: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_code) res ;
 
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal ~cmp:String.compare (String.concat "" inputs) (reconstruct res)
+
+let split payload =
+  let res = ref [] in
+  let tmp = Bytes.create 1024 in
+  let rec go consumed pos =
+    if consumed + pos = String.length payload
+    then ( if pos = 0 then List.rev !res else List.rev (Bytes.sub_string tmp 0 pos :: !res) )
+    else if pos = 1024
+    then ( res := Bytes.to_string tmp :: !res ; go (consumed + 1024) 0 )
+    else ( Bytes.set tmp pos payload.[consumed + pos]
+         ; go consumed (succ pos) ) in
+  go 0 0
+
+let () =
+  Crowbar.add_test ~name:"compress/uncompress" [ Crowbar.list (non_empty_bytes 1024) ] @@ fun inputs ->
+  Z.B.reset q ;
+  let res = Buffer.create 4096 in
+  let payloads = ref inputs in
+
+  let flush o len = for i = 0 to len - 1 do Buffer.add_char res o.{i} done in
+  let refill i = match !payloads with
+    | [] -> 0
+    | data :: rest ->
+      for x = 0 to String.length data - 1 do i.{x} <- data.[x] done ;
+      payloads := rest ; String.length data in
+  Z.Higher.compress ~w ~q ~i ~o refill flush ;
+
+  let splits = split (Buffer.contents res) in
+  Buffer.clear res ; payloads := splits ;
+
+  let flush o len = for i = 0 to len - 1 do Buffer.add_char res o.{i} done in
+  let refill i = match !payloads with
+    | [] -> 0
+    | data :: rest ->
+      for x = 0 to String.length data - 1 do i.{x} <- data.[x] done ;
+      payloads := rest ; String.length data in
+
+  Z.Higher.decompress ~w ~i ~o refill flush ;
+
+  Crowbar.check_eq ~eq:String.equal ~pp:pp_string ~cmp:String.compare
+    (Buffer.contents res) (String.concat "" inputs)
