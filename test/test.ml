@@ -1,6 +1,8 @@
-let w = Z.bigstring_create Z.Window.max
+let w = Z.make_window ~bits:15
 let o = Z.bigstring_create Z.io_buffer_size
 let q = Z.B.create 4096
+
+let unsafe_get_uint8 b i = Char.code (Bigstringaf.get b i)
 
 let pp_chr =
   Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
@@ -60,14 +62,14 @@ let encode ~block:kind lst =
     | `Partial -> assert false
 
 let encode_dynamic lst =
-  let literals = Z.N.make_literals () in
-  let distances = Z.N.make_distances () in
+  let literals = Z.make_literals () in
+  let distances = Z.make_distances () in
   List.iter
     (function
-     | `Literal chr -> Z.N.succ_literal literals chr
+     | `Literal chr -> Z.succ_literal literals chr
      | `Copy (off, len) ->
-        Z.N.succ_length literals len ;
-        Z.N.succ_distance distances off
+        Z.succ_length literals len ;
+        Z.succ_distance distances off
      | _ -> ())
     lst ;
   let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
@@ -162,13 +164,13 @@ let unroll_inflate decoder =
   let rec go () = match Z.M.decode decoder with
     | `Flush ->
        for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
-       do Buffer.add_char buf (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done ;
+       do Buffer.add_char buf (Char.unsafe_chr (unsafe_get_uint8 o i)) done ;
        Z.M.flush decoder ; go ()
     | `Await -> Alcotest.fail "Impossible `Await case"
     | `Malformed err -> Alcotest.fail err
     | `End ->
       for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
-      do Buffer.add_char buf (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done ;
+      do Buffer.add_char buf (Char.unsafe_chr (unsafe_get_uint8 o i)) done ;
       Buffer.contents buf in
   go ()
 
@@ -318,14 +320,14 @@ let fuzz9 () =
 
 let huffman_length_extra () =
   Alcotest.test_case "huffman length extra" `Quick @@ fun () ->
-  let literals = Z.N.make_literals () in
-  Z.N.succ_literal literals '\000' ;
-  Z.N.succ_literal literals '\000' ;
-  Z.N.succ_length literals 258 ;
-  Z.N.succ_length literals 256 ;
-  let distances = Z.N.make_distances () in
-  Z.N.succ_distance distances 1 ;
-  Z.N.succ_distance distances 1 ;
+  let literals = Z.make_literals () in
+  Z.succ_literal literals '\000' ;
+  Z.succ_literal literals '\000' ;
+  Z.succ_length literals 258 ;
+  Z.succ_length literals 256 ;
+  let distances = Z.make_distances () in
+  Z.succ_distance distances 1 ;
+  Z.succ_distance distances 1 ;
   let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
   let res = encode ~block:(Z.N.Dynamic dynamic) [ `Literal '\000'
                                                 ; `Literal '\000'
@@ -628,13 +630,13 @@ let ( <.> ) f g = fun x -> f (g x)
 let dynamic_and_fixed () =
   Alcotest.test_case "dynamic+fixed" `Quick @@ fun () ->
   let res = Buffer.create 16 in
-  let literals = Z.N.make_literals () in
-  let distances = Z.N.make_distances () in
+  let literals = Z.make_literals () in
+  let distances = Z.make_distances () in
   Z.B.reset q ;
   List.iter (Z.B.push_exn q <.> Z.B.cmd) [ `Literal 'a'; `Copy (1, 3) ] ;
-  Z.N.succ_literal literals 'a' ;
-  Z.N.succ_length literals 3 ;
-  Z.N.succ_distance distances 1 ;
+  Z.succ_literal literals 'a' ;
+  Z.succ_length literals 3 ;
+  Z.succ_distance distances 1 ;
   let dynamic_a = Z.N.dynamic_of_frequencies ~literals ~distances in
   let encoder = Z.N.encoder (`Buffer res) ~q in
   let rec go = function
@@ -658,13 +660,13 @@ let dynamic_and_fixed () =
 let fixed_and_dynamic () =
   Alcotest.test_case "fixed+dynamic" `Quick @@ fun () ->
   let res = Buffer.create 16 in
-  let literals = Z.N.make_literals () in
-  let distances = Z.N.make_distances () in
+  let literals = Z.make_literals () in
+  let distances = Z.make_distances () in
   Z.B.reset q ;
   List.iter (Z.B.push_exn q <.> Z.B.cmd) [ `Literal 'a'; `Copy (1, 3) ] ;
-  Z.N.succ_literal literals 'b' ;
-  Z.N.succ_length literals 3 ;
-  Z.N.succ_distance distances 1 ;
+  Z.succ_literal literals 'b' ;
+  Z.succ_length literals 3 ;
+  Z.succ_distance distances 1 ;
   let dynamic_b = Z.N.dynamic_of_frequencies ~literals ~distances in
   let encoder = Z.N.encoder (`Buffer res) ~q in
   let rec go = function
@@ -688,18 +690,18 @@ let fixed_and_dynamic () =
 let dynamic_and_dynamic () =
   Alcotest.test_case "dynamic+dynamic" `Quick @@ fun () ->
   let res = Buffer.create 16 in
-  let literals = Z.N.make_literals () in
-  let distances = Z.N.make_distances () in
+  let literals = Z.make_literals () in
+  let distances = Z.make_distances () in
   Z.B.reset q ;
   List.iter (Z.B.push_exn q <.> Z.B.cmd) [ `Literal 'a'; `Copy (1, 3); `Literal 'b'; `Copy (1, 3); `End ] ;
 
-  Z.N.succ_literal literals 'a' ;
-  Z.N.succ_length literals 3 ;
-  Z.N.succ_distance distances 1 ;
+  Z.succ_literal literals 'a' ;
+  Z.succ_length literals 3 ;
+  Z.succ_distance distances 1 ;
   let dynamic_a = Z.N.dynamic_of_frequencies ~literals ~distances in
-  Z.N.succ_literal literals 'b' ;
-  Z.N.succ_length literals 3 ;
-  Z.N.succ_distance distances 1 ;
+  Z.succ_literal literals 'b' ;
+  Z.succ_length literals 3 ;
+  Z.succ_distance distances 1 ;
   let dynamic_b = Z.N.dynamic_of_frequencies ~literals ~distances in
 
   let encoder = Z.N.encoder (`Buffer res) ~q in
@@ -773,8 +775,8 @@ let _l_codes = _literals + 1 + _length_codes
 
 let tree_0 () =
   Alcotest.test_case "empty literals/lengths freqs" `Quick @@ fun () ->
-  let literals = Z.N.make_literals () in
-  let literals = Z.N.unsafe_literals_to_array literals in
+  let literals = Z.make_literals () in
+  let literals = (literals :> int array) in
   let bl_count = Array.make (_max_bits + 1) 0 in
   let tree = Z.T.make ~length:_l_codes literals ~bl_count in
   let lengths = ref [] in
@@ -843,8 +845,8 @@ let tree_rfc5322_corpus () =
   Alcotest.(check (pair int int)) "literal 6" (10, 0x35f) (len_6, code_6) ;
   Alcotest.(check (pair int int)) "eob" (15, 0x6fff) (len_eob, code_eob)
 
-let w0 = Z.bigstring_create Z.Window.max
-let w1 = Z.bigstring_create Z.Window.max
+let w0 = Z.make_window ~bits:15
+let w1 = Z.make_window ~bits:15
 let s = Z.bigstring_create Z.io_buffer_size
 let o = Z.bigstring_create Z.io_buffer_size
 let q = Z.B.create (2 * 2 * 4096)
@@ -865,10 +867,10 @@ let compress_and_uncompress ic =
       k @@ Z.N.encode encoder `Await
     | `End ->
       for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
-      do Buffer.add_char b (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done
+      do Buffer.add_char b (Char.unsafe_chr (unsafe_get_uint8 o i)) done
     | `Flush ->
       for i = 0 to Z.io_buffer_size - Z.M.dst_rem decoder - 1
-      do Buffer.add_char b (Char.unsafe_chr (Z.unsafe_get_uint8 o i)) done ;
+      do Buffer.add_char b (Char.unsafe_chr (unsafe_get_uint8 o i)) done ;
       Z.M.flush decoder ;
       Z.N.dst encoder s 0 Z.io_buffer_size ;
       partial k @@ Z.M.decode decoder

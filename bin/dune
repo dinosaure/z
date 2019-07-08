@@ -7,7 +7,7 @@
 (executable
  (name pipe)
  (modules pipe)
- (libraries checkseum.c z bs cmdliner))
+ (libraries checkseum.c z bs bigstringaf cmdliner))
 
 (executable
  (name example)

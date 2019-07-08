@@ -11,8 +11,6 @@ let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 
 let bigstring_length x = Bigarray.Array1.dim x [@@inline]
 let bigstring_sub x off len = Bigarray.Array1.sub x off len [@@inline]
 let bigstring_blit a b = Bigarray.Array1.blit a b [@@inline]
-let bigstring_to_string = Bigstringaf.to_string
-let bigstring_of_string x = Bigstringaf.of_string ~off:0 ~len:(String.length x) x
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_get_char : bigstring -> int -> char = "%caml_ba_ref_1"
@@ -30,14 +28,87 @@ let unsafe_set_uint16 =
 external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
 external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
 
+external bytes_unsafe_set_uint32 : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
+let bytes_unsafe_set_uint8 : bytes -> int -> int -> unit =
+  fun buf off v -> Bytes.set buf off (Char.unsafe_chr (v land 0xff))
+
+external string_unsafe_get_uint32 : string -> int -> int32 = "%caml_string_get32"
+external bytes_unsafe_get_uint32 : bytes -> int -> int32 = "%caml_bytes_get32"
+let string_unsafe_get_uint8 : string -> int -> int =
+  fun buf off -> Char.code (String.get buf off)
+let bytes_unsafe_get_uint8 : bytes -> int -> int =
+  fun buf off -> Char.code (Bytes.get buf off)
+
+let bigstring_to_string v =
+  let len = bigstring_length v in
+  let res = Bytes.create len in
+  let len0 = len land 3 in
+  let len1 = len asr 2 in
+
+  for i = 0 to len1 - 1
+  do
+    let i = i * 4 in
+    let v = unsafe_get_uint32 v i in
+    bytes_unsafe_set_uint32 res i v
+  done ;
+
+  for i = 0 to len0 - 1
+  do
+    let i = len1 * 4 + i in
+    let v = unsafe_get_uint8 v i in
+    bytes_unsafe_set_uint8 res i v
+  done ;
+
+  Bytes.unsafe_to_string res
+
+let bigstring_of_string v =
+  let len = String.length v in
+  let res = bigstring_create len in
+  let len0 = len land 3 in
+  let len1 = len asr 2 in
+
+  for i = 0 to len1 - 1
+  do
+    let i = i * 4 in
+    let v = string_unsafe_get_uint32 v i in
+    unsafe_set_uint32 res i v
+  done ;
+
+  for i = 0 to len0 - 1
+  do
+    let i = len1 * 4 + i in
+    let v = string_unsafe_get_uint8 v i in
+    unsafe_set_uint8 res i v
+  done ; res
+
+let[@inline always] is_power_of_two v = v <> 0 && v land (lnot v + 1) = v
+
 let output_bigstring oc buf off len =
-  let tmp = Bigstringaf.substring buf ~off ~len in
-  output_string oc tmp
+  (* XXX(dinosaure): stupidly slow! *)
+  let v = Bigarray.Array1.sub buf off len in
+  let v = bigstring_to_string v in
+  output_string oc v
 
 let input_bigstring ic buf off len =
   let tmp = Bytes.create len in
   let res = input ic tmp 0 len in
-  Bigstringaf.blit_from_bytes tmp ~src_off:0 buf ~dst_off:off ~len:res ; res
+
+  let len0 = res land 3 in
+  let len1 = res asr 2 in
+
+  for i = 0 to len1 - 1
+  do
+    let i = i * 4 in
+    let v = bytes_unsafe_get_uint32 tmp i in
+    unsafe_set_uint32 buf (off + i) v
+  done ;
+
+  for i = 0 to len0 - 1
+  do
+    let i = len1 * 4 + i in
+    let v = bytes_unsafe_get_uint8 tmp i in
+    unsafe_set_uint8 buf (off + i) v
+  done ; res
 
 let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
 
@@ -201,7 +272,17 @@ let _base_dist =
   [| 0; 1; 2; 3; 4; 6; 8; 12; 16; 24; 32; 48; 64; 96; 128; 192; 256; 384; 512
    ; 768; 1024; 1536; 2048; 3072; 4096; 6144; 8192; 12288; 16384; 24576; (-1); (-1) |]
 
+(* Window for end-user. *)
+
+type window = bigstring
+
+let make_window ~bits =
+  if bits >= 8 && bits <= 15 then bigstring_create (1 lsl 15)
+  else invalid_arg "bits MUST be between 8 and 15"
+
 module Lookup = struct
+  (* Used as inflate to store lookup.[bit-sequence] = [len << 15 | byte].
+     Used as deflate to store lookup.[byte] = [len << 15 | bit-sequence]. *)
   type t =
     { t : int array
     ; m : int
@@ -286,7 +367,7 @@ let _static_dtree =
 
 type optint = Optint.t
 
-(* XXX(dinosaure): optimize [Heap]. *)
+(* XXX(dinosaure): optimize [Heap]. TODO! *)
 
 module Heap = struct
   type priority = int
@@ -359,8 +440,9 @@ module Window = struct
 
   let have t =
     if compare t.w max < 0 then t.w else max
-  (* XXX(dinosaure): this code works only for an deflated input less than
-     [max_int] bytes. *)
+  (* XXX(dinosaure): a dragoon here. overflow can appear on [t.w] which only
+     increases. [compare] gives us a new chance to compare correctly [t.w] if it
+     overflows __one-time__. Then, for the second time, this code is broke. *)
 
   let blit t w w_off o o_off len =
     let msk = mask t.w in
@@ -534,6 +616,8 @@ module M = struct
 
   let final _ = End
 
+  (* errors. *)
+
   let err_unexpected_end_of_input d =
     eoi d ; d.k <- final ;
     malformedf "Unexpected end of input"
@@ -577,7 +661,7 @@ module M = struct
     | `String _ ->
       eoi d ; k d
     | `Channel ic ->
-      let res = input_bigstring ic d.i 0 (Bigstringaf.length d.i) in
+      let res = input_bigstring ic d.i 0 (bigstring_length d.i) in
       src d d.i 0 res ; k d
     | `Manual ->
       d.k <- k ; Await
@@ -944,13 +1028,13 @@ module M = struct
           bits := !bits - len ;
           d.d <- _base_dist.(d.d) + 1 + extra ;
 
-          (* if d.d > Window.have d.w then raise Invalid_distance ;
-             XXX(dinosaure): [Window.have] does not tell me the truth where
-             we need a read cursor in [Window.t] for that. *)
-
           jump := Write
         | Write ->
           if d.d > Window.have d.w then raise_notrace Invalid_distance ;
+
+          (* if d.d > Window.have d.w then raise Invalid_distance ;
+             XXX(dinosaure): [Window.have] does not tell me the truth where
+             we need a read cursor in [Window.t] for that. *)
 
           let len = min d.l (bigstring_length d.o - !o_pos) in
           let off = Window.mask (d.w.Window.w - d.d) in
@@ -1644,6 +1728,8 @@ module B = struct
     t.w <- t.w + len
 
   let create length =
+    if not (is_power_of_two length) then invalid_arg "Length of queue MUST be a power of two" ;
+
     { buf= Bigarray.Array1.create Bigarray.int Bigarray.c_layout length
     ; w= 0
     ; r= 0
@@ -1673,6 +1759,31 @@ module B = struct
     List.iter (push_exn q <.> cmd) lst ; q
 end
 
+type literals = int array
+type distances = int array
+
+let pp_literals = Fmt.(Dump.array int)
+let pp_distances = Fmt.(Dump.array int)
+
+external unsafe_literals_to_array : literals -> int array = "%identity"
+external unsafe_distances_to_array : distances -> int array = "%identity"
+
+let make_literals () =
+  let res = Array.make (2 * _l_codes + 1) 0 in
+  res.(256) <- 1 ; res
+
+let succ_literal literals chr =
+  literals.(Char.code chr) <- literals.(Char.code chr) + 1
+let succ_length literals length =
+  assert (length >= 3 && length <= 255 + 3) ;
+  literals.(256 + 1 + _length.(length - 3)) <- literals.(256 + 1 + _length.(length - 3)) + 1
+
+let make_distances () = Array.make (2 * _d_codes + 1) 0
+
+let succ_distance distances distance =
+  assert (distance >= 1 && distance <= 32767 + 1) ;
+  distances.(_distance (pred distance)) <- distances.(_distance (pred distance)) + 1
+
 module N = struct
   type dst = [ `Channel of out_channel | `Buffer of Buffer.t | `Manual ]
 
@@ -1698,30 +1809,6 @@ module N = struct
       T.pp_tree d.bltree
       d.h_lit d.h_dst d.h_len
       Fmt.(Dump.array int) d.symbols
-
-  type literals = int array
-  type distances = int array
-
-  let pp_literals = Fmt.(Dump.array int)
-  let pp_distances = Fmt.(Dump.array int)
-  external unsafe_literals_to_array : literals -> int array = "%identity"
-  external unsafe_distances_to_array : distances -> int array = "%identity"
-
-  let make_literals () =
-    let res = Array.make (2 * _l_codes + 1) 0 in
-    res.(256) <- 1 ; res
-
-  let succ_literal literals chr =
-    literals.(Char.code chr) <- literals.(Char.code chr) + 1
-  let succ_length literals length =
-    assert (length >= 3 && length <= 255 + 3) ;
-    literals.(256 + 1 + _length.(length - 3)) <- literals.(256 + 1 + _length.(length - 3)) + 1
-
-  let make_distances () = Array.make (2 * _d_codes + 1) 0
-
-  let succ_distance distances distance =
-    assert (distance >= 1 && distance <= 32767 + 1) ;
-    distances.(_distance (pred distance)) <- distances.(_distance (pred distance)) + 1
 
   let bl_tree ltree dtree ~bl_count =
     let bl_freqs = Array.make (2 * _bl_codes + 1) 0 in
@@ -1828,8 +1915,6 @@ module N = struct
       (* TODO: check why we need [unsafe_chr]. *)
       e.o_pos <- 0 ; k e
 
-  let pp_chr = Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
-
   let rec c_byte byte k e =
     let rem = o_rem e in
     if rem < 1
@@ -1900,6 +1985,7 @@ module N = struct
     go 0 e
 
   let encode_dynamic_header last dynamic k e =
+    (* More readable but should be optimized. *)
     let k5 e = encode_zigzag dynamic k e in
     let k4 e = c_bits (dynamic.h_len - 4) 4 k5 e in
     let k3 e = c_bits (dynamic.h_dst - 1) 5 k4 e in
@@ -1935,11 +2021,6 @@ module N = struct
             c_byte (e.hold land 0xff) k e )
     else k e
 
-  let pp_code ppf = function
-    | `Literal chr -> Fmt.pf ppf "(`Literal %02x:%a)" (Char.code chr) pp_chr chr
-    | `Copy (off, len) -> Fmt.pf ppf "(`Copy off:%d len:%d)" off len
-    | `End -> Fmt.string ppf "`End"
-
   let rec block k e = function
     | `Block block ->
       let k e = match block.kind with
@@ -1971,6 +2052,8 @@ module N = struct
            ; bits := !bits - 16
            ; o_pos := !o_pos + 2
            ; emit e ) in
+    (* [emit] is recursive to consume until [!bits] >= 16. Otherwise, process
+       can overflow [!hold]. *)
 
     let ltree, dtree = match e.blk with
       | { kind= Dynamic dynamic; _ } ->
@@ -1998,6 +2081,9 @@ module N = struct
           bits := !bits + len ;
           emit e
         | false ->
+          (* XXX(dinosaue): this code (in the worst case) works only on a
+             64-bits platform where [!hold] should be able to store at least 48
+             bits. TODO! *)
           let off, len = cmd land 0xffff, (cmd lsr 16) land 0x1ff in
 
           let code = _length.(len) in
@@ -2042,7 +2128,7 @@ module N = struct
           e.bits <- !bits ;
           e.o_pos <- !o_pos ;
 
-          if e.blk.last then assert false else k_nw e
+          k_nw e
         | { kind= Fixed; _ } ->
           let len, v = Lookup.get _static_ltree 256 in
           hold := (v lsl !bits) lor !hold ;
@@ -2053,7 +2139,7 @@ module N = struct
           e.bits <- !bits ;
           e.o_pos <- !o_pos ;
 
-          if e.blk.last then assert false else k_nw e
+          k_nw e
         | _ -> assert false )
     | End ->
       ( match e.blk with
@@ -2263,8 +2349,8 @@ module L = struct
     ; mutable i : bigstring
     ; mutable i_pos : int
     ; mutable i_len : int
-    ; l : N.literals
-    ; d : N.distances
+    ; l : literals
+    ; d : distances
     ; w : W.t
     ; h : int array
     ; h_msk : int
@@ -2293,7 +2379,7 @@ module L = struct
     | `String _ ->
       eoi s ; k s
     | `Channel ic ->
-      let res = input_bigstring ic s.i 0 (Bigstringaf.length s.i) in
+      let res = input_bigstring ic s.i 0 (bigstring_length s.i) in
       src s s.i 0 res ; k s
     | `Manual ->
       s.k <- k ; `Await
@@ -2322,7 +2408,7 @@ module L = struct
            ; B.blit s.b s.w.raw 0 rst )
       else B.blit s.b s.w.raw msk len ) ;
 
-    W.iter s.w (N.succ_literal s.l) ;
+    W.iter s.w (succ_literal s.l) ;
     W.junk s.w len ;
 
     if W.is_empty s.w
@@ -2364,10 +2450,10 @@ module L = struct
     (* XXX(dinosaure): prelude, a [match] is >= 3.  *)
     let chr = W.unsafe_get_char s.w !i in
     B.push_exn s.b (B.cmd (`Literal chr)) ; incr i ;
-    N.succ_literal s.l chr ;
+    succ_literal s.l chr ;
     let chr = W.unsafe_get_char s.w !i in
     B.push_exn s.b (B.cmd (`Literal (W.unsafe_get_char s.w !i))) ; incr i ;
-    N.succ_literal s.l chr ;
+    succ_literal s.l chr ;
 
     while s.w.w - !i >= 3 && not (B.is_full s.b) do
       try
@@ -2397,7 +2483,7 @@ module L = struct
       | Literal ->
         let chr = W.unsafe_get_char s.w !i in
         B.push_exn s.b (B.cmd (`Literal chr)) ; incr i ;
-        N.succ_literal s.l chr
+        succ_literal s.l chr
       | Match ->
         if !dst == 1
         then
@@ -2415,8 +2501,8 @@ module L = struct
             then incr len ;
 
             B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len ;
-            N.succ_length s.l !len ;
-            N.succ_distance s.d !dst )
+            succ_length s.l !len ;
+            succ_distance s.d !dst )
         else
           ( let source = !i - !dst in
             (* XXX(dinosaure): try to go furthermore. *)
@@ -2434,8 +2520,8 @@ module L = struct
             then incr len ;
 
             B.push_exn s.b (B.cmd (`Copy (!dst, !len))) ; i := !i + !len ;
-            N.succ_length s.l !len ;
-            N.succ_distance s.d !dst )
+            succ_length s.l !len ;
+            succ_distance s.d !dst )
     done ;
 
     W.junk s.w (!i - s.w.r) ;
@@ -2455,8 +2541,8 @@ module L = struct
     ; i
     ; i_pos
     ; i_len
-    ; l= N.make_literals ()
-    ; d= N.make_distances ()
+    ; l= make_literals ()
+    ; d= make_distances ()
     ; w= W.from w
     ; h= Array.make (1 lsl 8) 0
     ; h_msk= (1 lsl 8) - 1
@@ -2465,13 +2551,10 @@ module L = struct
 end
 
 module Higher = struct
-  let compress ~w ~q ~i ~o refill flush =
+  let compress ~w ~q ~i ~o ~refill ~flush =
     let state = L.state `Manual ~w ~q in
     let encoder = N.encoder `Manual ~q in
     let kind = ref N.Fixed in
-
-    B.reset q ;
-    N.dst encoder o 0 (bigstring_length o) ;
 
     let rec compress () = match L.compress state with
       | `Await ->
@@ -2501,9 +2584,9 @@ module Higher = struct
         flush o len ; N.dst encoder o 0 (bigstring_length o) ; pending (N.encode encoder `Await)
       | `Ok -> () in
 
-    compress ()
+    B.reset q ; N.dst encoder o 0 (bigstring_length o) ; compress ()
 
-  let decompress ~w ~i ~o refill flush =
+  let decompress ~w ~i ~o ~refill ~flush =
     let decoder = M.decoder `Manual ~o ~w in
 
     let rec decompress () = match M.decode decoder with
@@ -2518,4 +2601,48 @@ module Higher = struct
         flush o len ; M.flush decoder ; decompress ()
       | `Malformed err -> failwith err in
     decompress ()
+
+  let of_string ~o ~w input ~flush =
+    let decoder = M.decoder (`String input) ~o ~w in
+    let rec decompress () = match M.decode decoder with
+      | `Await -> assert false
+      | `End ->
+        let len = bigstring_length o - M.dst_rem decoder in
+        if len > 0 then flush o len
+      | `Flush ->
+        let len = bigstring_length o - M.dst_rem decoder in
+        flush o len ; M.flush decoder ; decompress ()
+      | `Malformed err -> failwith err in
+    decompress ()
+
+  let to_string ~i ~w ~q ~refill =
+    let buf = Buffer.create 4096 in
+    let state = L.state `Manual ~q ~w in
+    let encoder = N.encoder (`Buffer buf) ~q in
+    let kind = ref N.Fixed in
+
+    let rec compress () = match L.compress state with
+      | `Await ->
+        let len = refill i in
+        L.src state i 0 len ; compress ()
+      | `Flush ->
+        let literals = L.literals state in
+        let distances = L.distances state in
+        kind := N.Dynamic (N.dynamic_of_frequencies ~literals ~distances) ;
+        encode (N.encode encoder (`Block { N.kind= !kind; last= false; }))
+      | `End ->
+        B.push_exn q B.eob ; pending (N.encode encoder (`Block { N.kind= N.Fixed; last= true; }))
+    and encode = function
+      | `Partial -> assert false
+      | `Ok -> compress ()
+      | `Block ->
+        let literals = L.literals state in
+        let distances = L.distances state in
+        kind := N.Dynamic (N.dynamic_of_frequencies ~literals ~distances) ;
+        encode (N.encode encoder (`Block { N.kind= !kind; last= false; }))
+    and pending = function
+      | `Partial | `Block -> assert false
+      | `Ok -> () in
+
+    B.reset q ; compress () ; Buffer.contents buf
 end

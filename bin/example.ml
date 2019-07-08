@@ -1,13 +1,13 @@
-let literals = Z.N.make_literals ()
-let () = Z.N.succ_literal literals '\000'
-let () = Z.N.succ_literal literals '\000'
-let () = Z.N.succ_length literals 258
-let () = Z.N.succ_length literals 256
-let distances = Z.N.make_distances ()
-let () = Z.N.succ_distance distances 1
-let () = Z.N.succ_distance distances 1
+let literals = Z.make_literals ()
+let () = Z.succ_literal literals '\000'
+let () = Z.succ_literal literals '\000'
+let () = Z.succ_length literals 258
+let () = Z.succ_length literals 256
+let distances = Z.make_distances ()
+let () = Z.succ_distance distances 1
+let () = Z.succ_distance distances 1
 
-let w = Z.bigstring_create Z.Window.max
+let w = Z.make_window ~bits:15
 let o = Z.bigstring_create Z.io_buffer_size
 let q = Z.B.create 4096
 let huffman = Z.N.dynamic_of_frequencies ~literals ~distances
@@ -97,8 +97,8 @@ let compress ic oc =
       let lit = Z.L.literals state in
       let dst = Z.L.distances state in
       Fmt.epr "COMPRESS `FLUSH.\n%!" ;
-      Fmt.epr "DUMP LIT: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (Z.N.unsafe_literals_to_array lit) ;
-      Fmt.epr "DUMP DST: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (Z.N.unsafe_distances_to_array dst) ;
+      Fmt.epr "DUMP LIT: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (lit :> int array) ;
+      Fmt.epr "DUMP DST: @[<hov>%a@].\n%!" Fmt.(Dump.array int) (dst :> int array) ;
       dynamic := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:lit ~distances:dst) ;
       encode @@ Z.N.encode encoder (`Block { Z.N.kind= !dynamic; last= false; })
   and encode = function

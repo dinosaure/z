@@ -1,6 +1,6 @@
 let zlib_header = Z.bigstring_create 2
 
-let w = Z.bigstring_create Z.Window.max
+let w = Z.make_window ~bits:15
 let o = Z.bigstring_create Z.io_buffer_size
 let i = Z.bigstring_create Z.io_buffer_size
 let q = Z.B.create 4096
@@ -44,18 +44,14 @@ let run_deflate () =
       Z.B.push_exn q Z.B.eob ;
       pending @@ Z.N.encode encoder (`Block { Z.N.kind= Z.N.Fixed; last= true; })
     | `Flush ->
-      Fmt.epr ">>>> need to flush queue.\n%!" ;
       kind := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state)) ;
       encode @@ Z.N.encode encoder (`Block { Z.N.kind= !kind; last= false; })
   and encode = function
     | `Partial ->
-      Fmt.epr ">>>> output (dst_rem: %d).\n%!" (Z.N.dst_rem encoder) ;
       partial encode encoder
     | `Ok ->
-      Fmt.epr "encoding: done (dst_rem: %d).\n%!" (Z.N.dst_rem encoder) ;
       compress ()
     | `Block ->
-      Fmt.epr ">>>> reload huffman.\n%!" ;
       kind := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state)) ;
       encode @@ Z.N.encode encoder (`Block { Z.N.kind= !kind; last= false; })
   and pending = function

@@ -1,30 +1,24 @@
+(** {2 Prelude} *)
+
 type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 type optint = Optint.t
 
 val bigstring_create : int -> bigstring
-val unsafe_get_uint8 : bigstring -> int -> int
-
 val io_buffer_size : int
 
-module Window : sig
-  type t
+(** {2 Window} *)
 
-  val max : int
-  val make : unit -> t
-  val from : bigstring -> t
-  val checksum : t -> optint
-end
+type window
 
-module Lookup : sig
-  type t =
-    { t : int array
-    ; m : int
-    ; l : int }
+val make_window : bits:int -> window
+(** [make_window] allocates a new buffer which represents a {i window}. It used
+   by decoder and LZ77 compressor to keep tracking older inputs and:
 
-  val mask : int
-  val make : int array -> int -> t
-  val get : t -> int -> int * int
-end
+   {ul
+   {- process a copy from a distance by the decoder.}
+   {- generate a copy from the compression algorithm.}}*)
+
+(** {2 Decoder} *)
 
 module M : sig
   type src = [ `Channel of in_channel | `String of string | `Manual ]
@@ -32,13 +26,15 @@ module M : sig
 
   type decoder
 
-  val decoder : src -> o:bigstring -> w:bigstring -> decoder
+  val decoder : src -> o:bigstring -> w:window -> decoder
   val decode : decoder -> decode
 
   val src : decoder -> bigstring -> int -> int -> unit
   val dst_rem : decoder -> int
   val flush : decoder -> unit
 end
+
+(** {2 Queue} *)
 
 module B : sig
   type cmd
@@ -69,27 +65,19 @@ module B : sig
   val of_list : [ `Literal of char | `Copy of int * int | `End ] list -> t
 end
 
-module T : sig
-  module Heap : sig
-    type t
+(** {2 Frequencies} *)
 
-    val make : unit -> t
-    val populate : length:int -> freqs:int array -> int array -> depth:int array -> t -> int
-    val pkzip : int -> freqs:int array -> depth:int array -> t -> int
-    val pqdownheap : freqs:int array -> depth:int array -> t -> int -> unit
-    val pqremove : freqs:int array -> depth:int array -> t -> int
-  end
+type literals = private int array
+type distances = private int array
 
-  type tree =
-    { lengths : int array
-    ; max_code : int
-    ; tree : Lookup.t }
+val make_literals : unit -> literals
+val make_distances : unit -> distances
 
-  val generate_codes : tree_lengths:int array -> max_code:int -> bl_count:int array -> int array
-  val generate_lengths : tree_dads:int array -> tree_lengths:int array -> max_code:int -> max_length:int -> Heap.t -> bl_count:int array -> unit
-  val make : length:int -> ?max_length:int -> int array -> bl_count:int array -> tree
-  val scan : int array -> int -> bl_freqs:int array -> unit
-end
+val succ_literal : literals -> char -> unit
+val succ_length : literals -> int -> unit
+val succ_distance : distances -> int -> unit
+
+(** {2 Encoder} *)
 
 module N : sig
   type dst = [ `Channel of out_channel | `Buffer of Buffer.t | `Manual ]
@@ -99,21 +87,6 @@ module N : sig
   type block = { kind: kind; last: bool; }
 
   type encode = [ `Await | `Flush | `Block of block ]
-
-  type literals
-  type distances
-
-  val pp_literals : literals Fmt.t
-  val pp_distances : distances Fmt.t
-  val unsafe_literals_to_array : literals -> int array
-  val unsafe_distances_to_array : distances -> int array
-
-  val make_literals : unit -> literals
-  val make_distances : unit -> distances
-
-  val succ_literal : literals -> char -> unit
-  val succ_length : literals -> int -> unit
-  val succ_distance : distances -> int -> unit
 
   val dynamic_of_frequencies : literals:literals -> distances:distances -> dynamic
 
@@ -126,25 +99,50 @@ module N : sig
   val dst_rem : encoder -> int
 end
 
-module W : sig
-  val max : int
-end
-
 module L : sig
   type src = [ `Channel of in_channel | `String of string | `Manual ]
   type decode = [ `Flush | `Await | `End ]
 
   type state
 
-  val literals : state -> N.literals
-  val distances : state -> N.distances
+  val literals : state -> literals
+  val distances : state -> distances
 
   val src : state -> bigstring -> int -> int -> unit
   val compress : state -> decode
-  val state : src -> w:bigstring -> q:B.t -> state
+  val state : src -> w:window -> q:B.t -> state
 end
 
+(** {2 Higher API} *)
+
 module Higher : sig
-  val compress : w:bigstring -> q:B.t -> i:bigstring -> o:bigstring -> (bigstring -> int) -> (bigstring -> int -> unit) -> unit
-  val decompress : w:bigstring -> i:bigstring -> o:bigstring -> (bigstring -> int) -> (bigstring -> int -> unit) -> unit
+  val compress :
+    w:window ->
+    q:B.t ->
+    i:bigstring ->
+    o:bigstring ->
+    refill:(bigstring -> int) ->
+    flush:(bigstring -> int -> unit) -> unit
+
+  val decompress :
+    w:window ->
+    i:bigstring ->
+    o:bigstring ->
+    refill:(bigstring -> int) ->
+    flush:(bigstring -> int -> unit) -> unit
+
+  val of_string : o:bigstring -> w:window -> string -> flush:(bigstring -> int -> unit) -> unit
+  val to_string : i:bigstring -> w:window -> q:B.t -> refill:(bigstring -> int) -> string
+end
+
+(** / **)
+
+module Lookup : sig
+  type t = { t : int array; m : int; l : int; }
+  val get : t -> int -> int * int
+end
+
+module T : sig
+  type tree = { lengths : int array; max_code : int; tree : Lookup.t; }
+  val make : length:int -> ?max_length:int -> int array -> bl_count:int array -> tree
 end
