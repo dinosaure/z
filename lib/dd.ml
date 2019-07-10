@@ -83,6 +83,15 @@ let bigstring_of_string v =
 
 let[@inline always] is_power_of_two v = v <> 0 && v land (lnot v + 1) = v
 
+let[@inline always] to_power_of_two v =
+  let res = ref (pred v) in
+  res := !res lor (!res lsr 1) ;
+  res := !res lor (!res lsr 2) ;
+  res := !res lor (!res lsr 4) ;
+  res := !res lor (!res lsr 8) ;
+  res := !res lor (!res lsr 16) ;
+  succ !res
+
 let output_bigstring oc buf off len =
   (* XXX(dinosaure): stupidly slow! *)
   let v = Bigarray.Array1.sub buf off len in
@@ -780,7 +789,7 @@ module M = struct
     let required = 4 - (d.bits / 8) in
     c_bytes required k d
 
-  let flat d =
+  let rec flat d =
     let len = min (min (i_rem d) d.l) (bigstring_length d.o - d.o_pos) in
     Window.blit d.w d.i d.i_pos d.o d.o_pos len ;
 
@@ -796,7 +805,9 @@ module M = struct
       | 0, _ ->
         ( match d.src with
           | `String _ -> eoi d ; err_unexpected_end_of_input d
-          | `Channel _ -> assert false (* TODO *)
+          | `Channel ic ->
+            let len = input_bigstring ic d.i 0 (bigstring_length d.i) in
+            src d d.i 0 len ; flat d (* XXX(dinosaure): check this branch. TODO! *)
           | `Manual -> Await)
       | _, 0 -> Flush
       | _, _ -> assert false
@@ -1071,7 +1082,9 @@ module M = struct
 
              [slow_inflate] is more precise (but... slow) and will consume them
              to reach [End_of_inflate] then correctly. *)
-          | `Channel _ -> assert false (* TODO *)
+          | `Channel ic ->
+            let len = input_bigstring ic d.i 0 (bigstring_length d.i) in
+            src d d.i 0 len ; K (* XXX(dinosaure): should work fine! But it needs check. *)
           | `Manual -> Await )
     with End ->
       d.hold <- Nativeint.to_int !hold ;
@@ -1755,7 +1768,7 @@ module B = struct
   let ( <.> ) f g = fun x -> f (g x)
 
   let of_list lst =
-    let q = create 4096 in (* TODO *)
+    let q = create (to_power_of_two (List.length lst)) in
     List.iter (push_exn q <.> cmd) lst ; q
 end
 
@@ -1877,6 +1890,7 @@ module N = struct
     ; mutable hold : int
     ; mutable bits : int
     ; mutable bits_rem : [ `Rem of int | `Pending ]
+    ; mutable flat : int
     ; mutable o : bigstring
     ; mutable o_pos : int
     ; mutable o_max : int
@@ -1946,6 +1960,47 @@ module N = struct
         e.hold <- (bits lsl e.bits) lor e.hold
       ; e.bits <- e.bits + long
       ; c_short (e.hold land 0xffff) k e )
+
+  (* encode flat *)
+
+  let rec ensure n k e =
+    let rem = o_rem e in
+    if rem >= n then k e else flush (ensure n k) e
+
+  let flush_bits k e =
+    assert (e.bits <= 16) ;
+
+    if e.bits > 8
+    then
+      ( let k e =
+          e.hold <- 0 ;
+          e.bits <- 0 ;
+          k e in
+        c_short (e.hold land 0xffff) k e)
+    else if e.bits > 0
+    then
+      ( let k e =
+          e.hold <- 0 ;
+          e.bits <- 0 ;
+          k e in
+        c_byte (e.hold land 0xff) k e )
+    else k e
+
+  let encode_flat_header last len k e =
+    let k3 e =
+      assert (o_rem e >= 4) ;
+
+      unsafe_set_uint16 e.o (e.o_pos + 0) len ;
+      unsafe_set_uint16 e.o (e.o_pos + 2) (lnot len) ;
+      e.o_pos <- e.o_pos + 4 ;
+      e.flat <- 0 ; (* XXX(dinosaure): clean! *)
+
+      k e in
+    let k2 e = flush_bits (ensure 4 k3) e in
+    let k1 e = c_bits 0x0 2 k2 e in
+    let k0 e = c_bits (if last then 1 else 0) 1 k1 e in
+
+    k0 e
 
   (* encode dynamic huffman tree *)
 
@@ -2021,18 +2076,16 @@ module N = struct
             c_byte (e.hold land 0xff) k e )
     else k e
 
-  let rec block k e = function
+  let rec block e = function
     | `Block block ->
       let k e = match block.kind with
         | Dynamic dynamic ->
-          encode_dynamic_header block.last dynamic (fun e -> e.k <- encode ; k e) e
+          encode_dynamic_header block.last dynamic (fun e -> e.k <- encode ; write e) e
         | Fixed ->
-          encode_fixed_header block.last (fun e -> e.k <- encode ; k e) e
-        | _ -> assert false in
+          encode_fixed_header block.last (fun e -> e.k <- encode ; write e) e
+        | Flat len -> encode_flat_header block.last len (fun e -> e.k <- encode ; write_flat e) e in
       e.blk <- block ; k e
-    | (`Flush | `Await) as v -> encode e v (* TODO *)
-
-  and new_block k e = e.k <- block k ; `Block
+    | (`Flush | `Await) as v -> encode e v (* TODO: not really clear. *)
 
   and write e =
     let o_pos = ref e.o_pos in
@@ -2043,7 +2096,7 @@ module N = struct
     let exception End in
 
     let k_ok e = e.k <- encode ; `Ok in
-    let k_nw e = e.k <- block write ; `Block in
+    let k_nw e = e.k <- block ; `Block in
 
     let rec emit e =
       if !bits >= 16
@@ -2153,7 +2206,7 @@ module N = struct
           e.bits <- !bits ;
           e.o_pos <- !o_pos ;
 
-          if e.blk.last then pending_bits k_ok e else k_ok e
+          if e.blk.last then pending_bits k_ok e else k_nw e
         | { kind= Fixed; _ } ->
           let len, v = Lookup.get _static_ltree 256 in
           hold := (v lsl !bits) lor !hold ;
@@ -2164,7 +2217,7 @@ module N = struct
           e.bits <- !bits ;
           e.o_pos <- !o_pos ;
 
-          if e.blk.last then pending_bits k_ok e else k_ok e
+          if e.blk.last then pending_bits k_ok e else k_nw e
         | _ -> assert false )
 
   and force blk e =
@@ -2182,38 +2235,72 @@ module N = struct
       e.bits <- e.bits + len ;
       emit e ;
 
-      block write e (`Block blk)
+      block e (`Block blk)
     | { kind= Fixed; _ } ->
       let len, v = Lookup.get _static_ltree 256 in
       e.hold <- (v lsl e.bits) lor e.hold ;
       e.bits <- e.bits + len ;
       emit e ;
 
-      block write e (`Block blk)
-    | _ -> assert false
+      block e (`Block blk)
+    | _ -> assert false (* XXX(dinosaure): should never occur! *)
+
+  and write_flat e =
+    let[@warning "-8"] Flat max = e.blk.kind in
+
+    let o_pos = ref e.o_pos in
+    let flat = ref e.flat in
+
+    while e.o_max - !o_pos + 1 > 1 && not (B.is_empty e.b) && !flat < max do
+      let cmd = B.pop_exn e.b in
+
+      if not (cmd land 0x2000000 == 0) || cmd == 256
+      then Fmt.invalid_arg "Impossible to emit a copy code or a EOB in a Flat block" ;
+
+      unsafe_set_uint8 e.o !o_pos (cmd land 0xff) ;
+      incr o_pos ; incr flat ;
+    done ;
+
+    e.flat <- !flat ;
+    e.o_pos <- !o_pos ;
+
+    if !flat == max then ( if e.blk.last then flush (fun _ -> `Ok) e else ( e.k <- block ; `Block ) )
+    else if o_rem e == 0 then flush write_flat e
+    else ( (* assert (B.is_empty e.b ) *) `Ok )
 
   and encode e = function
     | `Await -> e.k <- encode ; `Ok (* XXX(dinosaure): do nothing. *)
-    | `Flush -> write e
-    | `Block block ->
+    | `Flush ->
+      ( match e.blk.kind with
+        | Flat _ -> write_flat e
+        | Dynamic _ | Fixed -> write e )
+    | `Block blk ->
       if e.blk.last
       then Fmt.invalid_arg "Impossible to make a new block when the current block is the last one" ;
 
-      if o_rem e > 1
-      then force block e
-      else flush (fun e -> force block e) e
+      ( match e.blk.kind with
+        | Flat max ->
+          if e.flat < max
+          then Fmt.invalid_arg "Impossible to make a new block when the current Flat block is not fully filled" ;
+
+          block e (`Block blk)
+        | Dynamic _ | Fixed ->
+          if o_rem e > 1
+          then force blk e
+          else flush (fun e -> force blk e) e )
 
   let first_entry e = function
     | `Block blk ->
       e.k <- encode ;
-      block (fun e -> e.k <- encode ; write e) e (`Block blk)
+      block e (`Block blk)
     | (`Flush | `Await) as v ->
       match e.blk.kind with
       | Dynamic dynamic ->
         encode_dynamic_header e.blk.last dynamic (fun e -> e.k <- encode ; encode e v) e
       | Fixed ->
         encode_fixed_header e.blk.last (fun e -> e.k <- encode ; encode e v) e
-      | _ -> assert false
+      | Flat len ->
+        encode_flat_header e.blk.last len (fun e -> e.k <- encode ; encode e v) e
 
   let dst_rem = o_rem
 
@@ -2231,6 +2318,7 @@ module N = struct
     ; hold= 0
     ; bits= 0
     ; bits_rem= `Pending
+    ; flat= 0
     ; o
     ; o_pos
     ; o_max
