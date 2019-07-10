@@ -2,17 +2,17 @@
  (name bs)
  (modules bs)
  (c_names bs)
- (libraries unix z))
+ (libraries unix dd))
 
 (executable
  (name pipe)
  (modules pipe)
- (libraries checkseum.c z bs bigstringaf cmdliner))
+ (libraries checkseum.c dd bs bigstringaf cmdliner))
 
 (executable
  (name example)
  (modules example)
- (libraries checkseum.c hxd.string z))
+ (libraries checkseum.c hxd.string dd))
 
 (executable
  (name zpipe)

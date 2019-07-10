@@ -1,7 +1,9 @@
-let w = Z.bigstring_create Z.Window.max
-let i = Z.bigstring_create Z.io_buffer_size
-let o = Z.bigstring_create Z.io_buffer_size
-let q = Z.B.create 4096
+open Dd
+
+let w = make_window ~bits:15
+let i = bigstring_create io_buffer_size
+let o = bigstring_create io_buffer_size
+let q = B.create 4096
 
 exception End_of_input
 
@@ -22,22 +24,22 @@ let zlib bytes =
      | End_of_input -> Crowbar.bad_test ()
 
 let z bytes =
-  let decoder = Z.M.decoder (`String bytes) ~o ~w in
+  let decoder = M.decoder (`String bytes) ~o ~w in
   let buf = Buffer.create 16 in
 
-  let rec go () = match Z.M.decode decoder with
+  let rec go () = match M.decode decoder with
     | `Await -> assert false
     | `Flush ->
-      let len = Z.io_buffer_size - (Z.M.dst_rem decoder) in
+      let len = io_buffer_size - (M.dst_rem decoder) in
       let res = Bigstringaf.substring o ~off:0 ~len in
       Buffer.add_string buf res ;
-      Z.M.flush decoder ;
+      M.flush decoder ;
       go ()
     | `End ->
-      let len = Z.io_buffer_size - (Z.M.dst_rem decoder) in
+      let len = io_buffer_size - (M.dst_rem decoder) in
       let res = Bigstringaf.substring o ~off:0 ~len in
       Buffer.add_string buf res ;
-      Z.M.flush decoder ;
+      M.flush decoder ;
       Buffer.contents buf
     | `Malformed err -> Crowbar.fail err in
   go ()
@@ -77,11 +79,8 @@ let uniq =
 
 let () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.bytes ] @@ fun bytes ->
-  Fmt.epr "Test %S.\n%!" bytes ;
   let res0 = zlib bytes in
-  Fmt.epr "Process %S.\n%!" bytes ;
   let res1 = z bytes in
-  Fmt.epr "Check %S.\n%!" bytes ;
 
   if String.equal res0 res1 = false
   then ( let id = uniq () in
@@ -101,15 +100,15 @@ let gen_cmd = Crowbar.choose
     ; Crowbar.(map [ range 256; range 32768 ] (fun len off -> `Copy (1 + off, 3 + len))) ]
 
 let frequencies_of_cmds cmds =
-  let literals = Z.N.make_literals () in
-  let distances = Z.N.make_distances () in
+  let literals = make_literals () in
+  let distances = make_distances () in
   List.iter
     (function
       | `Literal chr ->
-        Z.N.succ_literal literals chr
+        succ_literal literals chr
       | `Copy (off, len) ->
-        Z.N.succ_length literals len ;
-        Z.N.succ_distance distances off)
+        succ_length literals len ;
+        succ_distance distances off)
     cmds ;
   literals, distances
 
@@ -161,30 +160,24 @@ type cmd = [ `Literal of char | `Copy of int * int | `End ]
 let () =
   Crowbar.add_test ~name:"z/zlib" [ Crowbar.list gen_cmd ] @@ fun cmds ->
   if not (check_cmds cmds) then Crowbar.bad_test () ;
-  Z.B.reset q ;
+  B.reset q ;
 
-  Fmt.epr "deflated: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_cmd) cmds ;
-  List.iter (Z.B.push_exn q <.> Z.B.cmd) (cmds :> cmd list) ;
-  Z.B.push_exn q Z.B.eob ;
+  List.iter (B.push_exn q <.> B.cmd) (cmds :> cmd list) ;
+  B.push_exn q B.eob ;
 
   let expected = apply_cmds cmds in
   let buf = Buffer.create 16 in
   let literals, distances = frequencies_of_cmds cmds in
-  let dynamic = Z.N.dynamic_of_frequencies ~literals ~distances in
-  let encoder = Z.N.encoder (`Buffer buf) ~q in
-  List.iter (fun v -> match Z.N.encode encoder v with
+  let dynamic = N.dynamic_of_frequencies ~literals ~distances in
+  let encoder = N.encoder (`Buffer buf) ~q in
+  List.iter (fun v -> match N.encode encoder v with
       | `Ok -> ()
       | `Block -> Crowbar.fail "Impossible `Block case"
       | `Partial -> Crowbar.fail "Impossible `Partial case")
-    [ `Block { Z.N.kind= Z.N.Dynamic dynamic; last= true; }; `Flush ] ;
+    [ `Block { N.kind= N.Dynamic dynamic; last= true; }; `Flush ] ;
   let bytes = Buffer.contents buf in
   let res0 = zlib bytes in
   let res1 = z bytes in
-
-  Fmt.epr "deflated: %S.\n%!" bytes ;
-  Fmt.epr "inflated (zlib): %S.\n%!" res0 ;
-  Fmt.epr "inflated (z): %S.\n%!" res1 ;
-  Fmt.epr "inflated (fuzz): %S.\n%!" expected ;
 
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal expected res0 ;
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal res0 res1
@@ -222,29 +215,27 @@ let pp_code ppf = function
 
 let () =
   Crowbar.add_test ~name:"lz77" [ Crowbar.list (non_empty_bytes 1024) ] @@ fun inputs ->
-  Z.B.reset q ;
-  let state = Z.L.state `Manual ~w ~q in
+  B.reset q ;
+  let state = L.state `Manual ~w ~q in
   let res = ref [] in
-  let rec go inputs = match Z.L.compress state with
+  let rec go inputs = match L.compress state with
     | `End ->
-      let lst = Z.B.to_list q in
+      let lst = B.to_list q in
       res := lst :: !res ;
-      Z.B.junk_exn q (List.length lst) ;
+      B.junk_exn q (List.length lst) ;
       List.rev !res
     | `Flush ->
-      let lst = Z.B.to_list q in
+      let lst = B.to_list q in
       res := lst :: !res ;
-      Z.B.junk_exn q (List.length lst) ;
+      B.junk_exn q (List.length lst) ;
       go inputs
     | `Await -> match inputs with
-      | [] -> Z.L.src state Bigstringaf.empty 0 0 ; go []
+      | [] -> L.src state Bigstringaf.empty 0 0 ; go []
       | x :: r ->
         let x = Bigstringaf.of_string x ~off:0 ~len:(String.length x) in
-        Z.L.src state x 0 (Bigstringaf.length x) ; go r in
+        L.src state x 0 (Bigstringaf.length x) ; go r in
   let res = go inputs in
   let res = List.concat res in
-
-  Fmt.epr "Results: @[<hov>%a@].\n%!" Fmt.(Dump.list pp_code) res ;
 
   Crowbar.check_eq ~pp:pp_string ~eq:String.equal ~cmp:String.compare (String.concat "" inputs) (reconstruct res)
 
@@ -262,7 +253,7 @@ let split payload =
 
 let () =
   Crowbar.add_test ~name:"compress/uncompress" [ Crowbar.list (non_empty_bytes 1024) ] @@ fun inputs ->
-  Z.B.reset q ;
+  B.reset q ;
   let res = Buffer.create 4096 in
   let payloads = ref inputs in
 
@@ -272,7 +263,7 @@ let () =
     | data :: rest ->
       for x = 0 to String.length data - 1 do i.{x} <- data.[x] done ;
       payloads := rest ; String.length data in
-  Z.Higher.compress ~w ~q ~i ~o refill flush ;
+  Higher.compress ~w ~q ~i ~o ~refill ~flush ;
 
   let splits = split (Buffer.contents res) in
   Buffer.clear res ; payloads := splits ;
@@ -284,7 +275,40 @@ let () =
       for x = 0 to String.length data - 1 do i.{x} <- data.[x] done ;
       payloads := rest ; String.length data in
 
-  Z.Higher.decompress ~w ~i ~o refill flush ;
+  Higher.decompress ~w ~i ~o ~refill ~flush ;
 
   Crowbar.check_eq ~eq:String.equal ~pp:pp_string ~cmp:String.compare
     (Buffer.contents res) (String.concat "" inputs)
+
+let q = B.create 0xffff
+
+let () =
+  Crowbar.add_test ~name:"flat compression" [ Crowbar.list (non_empty_bytes 0xffff) ] @@ fun inputs ->
+  let res = Buffer.create 4096 in
+  let payloads = ref inputs in
+  let encoder = N.encoder (`Buffer res) ~q in
+
+  let fill q s =
+    for i = 0 to String.length s - 1 do B.push_exn q (B.literal s.[i]) done in
+
+  let rec go = function
+    | `Ok -> Buffer.contents res
+    | `Partial -> assert false
+    | `Block -> match !payloads with
+      | [] -> assert false (* XXX(dinosaure): or [{ kind= Flat 0; last= true; }] *)
+      | [ x ] ->
+        fill q x ; payloads := [] ;
+        go (N.encode encoder (`Block { N.kind= N.Flat (String.length x); last= true; }))
+      | x :: r ->
+        fill q x ; payloads := r ;
+        go (N.encode encoder (`Block { N.kind= N.Flat (String.length x); last= false; })) in
+  B.push_exn q B.eob ;
+  let res0 = go (N.encode encoder `Flush) in
+  let buf1 = Buffer.create 4096 in
+
+  let flush b l = for i = 0 to l - 1 do Buffer.add_char buf1 b.{i} done in
+  Higher.of_string ~o ~w res0 ~flush ;
+
+  Crowbar.check_eq ~eq:String.equal ~pp:pp_string ~cmp:String.compare
+    (Buffer.contents buf1) (String.concat "" inputs)
+

@@ -5,14 +5,14 @@ $(shell mkdir -p $(BUILDDIR) $(BUILDDIR)/lib $(BUILDDIR)/stub $(BUILDDIR)/rev $(
 PACKAGES=bigstringaf,optint,checkseum.c,fmt,ctypes.stubs,ctypes.foreign
 
 # The files used to build the stub generator.
-GENERATOR_FILES=$(BUILDDIR)/lib/z.cmx \
+GENERATOR_FILES=$(BUILDDIR)/lib/dd.cmx \
                 $(BUILDDIR)/rev/bindings.cmx \
                 $(BUILDDIR)/stub_generator/generate.cmx
 
 # The files from which we'll build a shared library.
-INTFILES=$(BUILDIR)/lib/z.cmi
+INTFILES=$(BUILDIR)/lib/dd.cmi
 
-LIBFILES=$(BUILDDIR)/lib/z.cmx \
+LIBFILES=$(BUILDDIR)/lib/dd.cmx \
          $(BUILDDIR)/rev/bindings.cmx	\
          $(BUILDDIR)/generated/miniz_bindings.cmx	\
          $(BUILDDIR)/rev/apply_bindings.cmx \
@@ -66,7 +66,19 @@ $(GENERATED): $(GENERATOR)
 $(BUILDDIR)/%.o: %.c
 	$(CC) -g -c -o $@ -fPIC -I $(shell ocamlfind query ctypes) -I $(OCAMLDIR) -I $(OCAMLDIR)/../ctypes $<
 
-$(BUILDDIR)/%.cmx: %.ml
+$(BUILDDIR)/%.cmi: %.mli
+	ocamlfind opt -I $(BUILDDIR)/lib -I $(BUILDDIR)/generated -I $(BUILDDIR)/rev -package $(PACKAGES) -c $< -o $@
+
+$(BUILDDIR)/rev/%.cmx: rev/%.ml
+	ocamlfind opt -O3 -unbox-closures -unbox-closures-factor 20 -c -o $@ -I $(BUILDDIR)/lib -I $(BUILDDIR)/generated -I $(BUILDDIR)/rev -package $(PACKAGES) $<
+
+$(BUILDDIR)/generated/%.cmx: generated/%.ml
+	ocamlfind opt -O3 -unbox-closures -unbox-closures-factor 20 -c -o $@ -I $(BUILDDIR)/lib -I $(BUILDDIR)/generated -I $(BUILDDIR)/rev -package $(PACKAGES) $<
+
+$(BUILDDIR)/stub_generator/%.cmx: stub_generator/%.ml
+	ocamlfind opt -O3 -unbox-closures -unbox-closures-factor 20 -c -o $@ -I $(BUILDDIR)/lib -I $(BUILDDIR)/generated -I $(BUILDDIR)/rev -package $(PACKAGES) $<
+
+$(BUILDDIR)/%.cmx: %.ml $(BUILDDIR)/%.cmi
 	ocamlfind opt -O3 -unbox-closures -unbox-closures-factor 20 -c -o $@ -I $(BUILDDIR)/lib -I $(BUILDDIR)/generated -I $(BUILDDIR)/rev -package $(PACKAGES) $<
 
 $(GENERATOR): $(GENERATOR_FILES)

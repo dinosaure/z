@@ -1,63 +1,65 @@
-let zlib_header = Z.bigstring_create 2
+open Dd
 
-let w = Z.make_window ~bits:15
-let o = Z.bigstring_create Z.io_buffer_size
-let i = Z.bigstring_create Z.io_buffer_size
-let q = Z.B.create 4096
+let zlib_header = bigstring_create 2
+
+let w = make_window ~bits:15
+let o = bigstring_create io_buffer_size
+let i = bigstring_create io_buffer_size
+let q = B.create 4096
 
 let run_inflate () =
-  let decoder = Z.M.decoder `Manual ~o ~w in
-  let rec go () = match Z.M.decode decoder with
+  let decoder = M.decoder `Manual ~o ~w in
+  let rec go () = match M.decode decoder with
     | `Await ->
-      let len = Bs.bigstring_input Unix.stdin i 0 Z.io_buffer_size in
-      Z.M.src decoder i 0 len ; go ()
+      let len = Bs.bigstring_input Unix.stdin i 0 io_buffer_size in
+      M.src decoder i 0 len ; go ()
     | `Flush ->
-      let len = Z.io_buffer_size - Z.M.dst_rem decoder in
-      Bs.bigstring_output Unix.stdout o 0 len ; Z.M.flush decoder ; go ()
+      let len = io_buffer_size - M.dst_rem decoder in
+      Bs.bigstring_output Unix.stdout o 0 len ; M.flush decoder ; go ()
     | `Malformed err ->
       Fmt.epr "%s.\n%!" err ; `Error err
     | `End ->
-      let len = Z.io_buffer_size - Z.M.dst_rem decoder in
+      let len = io_buffer_size - M.dst_rem decoder in
       if len > 0 then Bs.bigstring_output Unix.stdout o 0 len ;
       `Ok () in
   go ()
 
 let run_deflate () =
-  let state = Z.L.state `Manual ~w ~q in
-  let kind = ref Z.N.Fixed in
-  let encoder = Z.N.encoder `Manual ~q in
+  let state = L.state `Manual ~w ~q in
+  let kind = ref N.Fixed in
+  let encoder = N.encoder `Manual ~q in
 
-  Z.N.dst encoder o 0 Z.io_buffer_size ;
+  N.dst encoder o 0 io_buffer_size ;
 
   let partial k encoder =
-    let len = Z.io_buffer_size - Z.N.dst_rem encoder in
+    let len = io_buffer_size - N.dst_rem encoder in
     let tmp = Bigstringaf.substring o ~off:0 ~len in
     if len > 0 then output_string stdout tmp ;
-    Z.N.dst encoder o 0 Z.io_buffer_size ;
-    k @@ Z.N.encode encoder `Await in
+    N.dst encoder o 0 io_buffer_size ;
+    k @@ N.encode encoder `Await in
 
-  let rec compress () = match Z.L.compress state with
+  let rec compress () = match L.compress state with
     | `Await ->
-      let len = Bs.bigstring_input Unix.stdin i 0 Z.io_buffer_size in
-      Z.L.src state i 0 len ; compress ()
+      let len = Bs.bigstring_input Unix.stdin i 0 io_buffer_size in
+      L.src state i 0 len ; compress ()
     | `End ->
-      Z.B.push_exn q Z.B.eob ;
-      pending @@ Z.N.encode encoder (`Block { Z.N.kind= Z.N.Fixed; last= true; })
+      B.push_exn q B.eob ;
+      pending @@ N.encode encoder (`Block { N.kind= N.Fixed; last= true; })
     | `Flush ->
-      kind := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state)) ;
-      encode @@ Z.N.encode encoder (`Block { Z.N.kind= !kind; last= false; })
+      kind := N.Dynamic (N.dynamic_of_frequencies ~literals:(L.literals state) ~distances:(L.distances state)) ;
+      encode @@ N.encode encoder (`Block { N.kind= !kind; last= false; })
   and encode = function
     | `Partial ->
       partial encode encoder
     | `Ok ->
       compress ()
     | `Block ->
-      kind := Z.N.Dynamic (Z.N.dynamic_of_frequencies ~literals:(Z.L.literals state) ~distances:(Z.L.distances state)) ;
-      encode @@ Z.N.encode encoder (`Block { Z.N.kind= !kind; last= false; })
+      kind := N.Dynamic (N.dynamic_of_frequencies ~literals:(L.literals state) ~distances:(L.distances state)) ;
+      encode @@ N.encode encoder (`Block { N.kind= !kind; last= false; })
   and pending = function
     | `Partial -> partial pending encoder
     | `Block -> assert false (* never occur! *)
-    | `Ok -> last @@ Z.N.encode encoder `Flush
+    | `Ok -> last @@ N.encode encoder `Flush
   and last = function
     | `Partial -> partial last encoder
     | `Ok -> `Ok ()
