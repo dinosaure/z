@@ -1,13 +1,10 @@
-open Dd
-
-let zlib_header = bigstring_create 2
-
-let w = make_window ~bits:15
-let o = bigstring_create io_buffer_size
-let i = bigstring_create io_buffer_size
-let q = B.create 4096
+let w = Dd.make_window ~bits:15
+let o = Dd.bigstring_create Dd.io_buffer_size
+let i = Dd.bigstring_create Dd.io_buffer_size
+let q = Dd.B.create 4096
 
 let run_inflate () =
+  let open Dd in
   let decoder = M.decoder `Manual ~o ~w in
   let rec go () = match M.decode decoder with
     | `Await ->
@@ -25,6 +22,7 @@ let run_inflate () =
   go ()
 
 let run_deflate () =
+  let open Dd in
   let state = L.state `Manual ~w ~q in
   let kind = ref N.Fixed in
   let encoder = N.encoder `Manual ~q in
@@ -67,9 +65,30 @@ let run_deflate () =
 
   compress ()
 
-let run = function
-  | true -> run_deflate ()
-  | false -> run_inflate ()
+let run_zlib_deflate () =
+  let open Zz in
+  let allocate bits = Dd.make_window ~bits in
+  let decoder = M.decoder `Manual ~o ~allocate in
+
+  let rec go decoder = match M.decode decoder with
+    | `Await decoder ->
+      let len = Bs.bigstring_input Unix.stdin i 0 io_buffer_size in
+      M.src decoder i 0 len |> go
+    | `Flush decoder ->
+      let len = io_buffer_size - M.dst_rem decoder in
+      Bs.bigstring_output Unix.stdout o 0 len ; M.flush decoder |> go
+    | `Malformed err ->
+      `Error err
+    | `End decoder ->
+      let len = io_buffer_size - M.dst_rem decoder in
+      if len > 0 then Bs.bigstring_output Unix.stdout o 0 len ;
+      `Ok () in
+  go decoder
+
+let run deflate format = match format with
+  | `Deflate -> if deflate then run_deflate () else run_inflate ()
+  | `Zlib -> if deflate then assert false else run_zlib_deflate ()
+  | `Gzip -> assert false
 
 open Cmdliner
 
@@ -77,13 +96,26 @@ let deflate =
   let doc = "Deflate input." in
   Arg.(value & flag & info [ "d" ] ~doc)
 
+let format =
+  let parser s = match String.lowercase_ascii s with
+    | "zlib" -> Ok `Zlib
+    | "gzip" -> Ok `Gzip
+    | "deflate" -> Ok `Deflate
+    | x -> Rresult.R.error_msgf "Invalid format: %S" x in
+  let pp ppf = function
+    | `Zlib -> Fmt.pf ppf "zlib"
+    | `Gzip -> Fmt.pf ppf "gzip"
+    | `Deflate -> Fmt.pf ppf "DEFLATE" in
+  let format = Arg.conv (parser, pp) in
+  Arg.(value & opt format `Deflate & info [ "f"; "format" ])
+
 let command =
   let doc = "Pipe." in
   let exits = Term.default_exits in
   let man =
     [ `S "Description"
     ; `P "$(tname) takes a standard input and write in standard output the compressed/uncompressed data." ] in
-  Term.(pure run $ deflate),
+  Term.(pure run $ deflate $ format),
   Term.info "pipe" ~exits ~doc ~man
 
 let () = Term.(exit @@ eval command)

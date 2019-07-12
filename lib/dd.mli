@@ -31,7 +31,9 @@ module M : sig
 
   val src : decoder -> bigstring -> int -> int -> unit
   val dst_rem : decoder -> int
+  val src_rem : decoder -> int
   val flush : decoder -> unit
+  val checksum : decoder -> optint
 end
 
 (** {2 Queue} *)

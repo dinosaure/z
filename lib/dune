@@ -2,3 +2,8 @@
  (name dd)
  (modules dd)
  (libraries checkseum fmt))
+
+(library
+ (name zz)
+ (modules zz)
+ (libraries dd))

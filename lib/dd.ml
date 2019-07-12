@@ -767,27 +767,8 @@ module M = struct
         else refill (c_bytes n k) d (* allocation *) )
 
   let checksum d =
-    let k d =
-      Window.tail d.w ;
-
-      let a0 = Optint.of_int (hold_or_input d) in
-      let a1 = Optint.of_int (hold_or_input d) in
-      let b0 = Optint.of_int (hold_or_input d) in
-      let b1 = Optint.of_int (hold_or_input d) in
-
-      let v = Window.checksum d.w in
-      let v' = Optint.Infix.(a0 << 24 || a1 << 16 || b0 << 8 || b1) in
-
-      if Optint.equal v v'
-      then
-        let k d = d.k <- final ; End in
-        if d.o_pos == 0 then End
-        else ( d.s <- End_of_inflate
-             ; d.k <- k
-             ; Flush )
-      else err_invalid_checksum d in
-    let required = 4 - (d.bits / 8) in
-    c_bytes required k d
+    Window.tail d.w ;
+    Window.checksum d.w
 
   let rec flat d =
     let len = min (min (i_rem d) d.l) (bigstring_length d.o - d.o_pos) in
@@ -1282,7 +1263,10 @@ module M = struct
     | Flat_header -> d.k d
     | Flat -> flat d
     | Checkseum -> d.k d
-    | End_of_inflate -> End
+    | End_of_inflate ->
+      if d.bits >= 8
+      then ( d.i_pos <- d.i_pos - 1 ; d.bits <- d.bits - 8 ; d.hold <- 0 (* XXX(dinosaure): keep? *) ) ;
+      End
 
   let rec decode d = match decode_k d with
     | Await -> `Await
@@ -1292,6 +1276,7 @@ module M = struct
     | K -> decode d
 
   let dst_rem d = bigstring_length d.o - d.o_pos
+  let src_rem d = i_rem d
   let flush d = d.o_pos <- 0
 
   let decoder src ~o ~w =
