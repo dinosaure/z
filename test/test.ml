@@ -5,6 +5,7 @@ let o = bigstring_create io_buffer_size
 let q = B.create 4096
 
 let unsafe_get_uint8 b i = Char.code (Bigstringaf.get b i)
+let unsafe_get_uint32_be b i = Bigstringaf.get_int32_be b i
 
 let pp_chr =
   Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
@@ -998,6 +999,54 @@ let test_corpus filename =
   let ic = open_in Filename.(concat "corpus" filename) in
   compress_and_uncompress ic ; close_in ic
 
+let zlib_compress_and_uncompress ic =
+  Dd.B.reset q ;
+  let encoder = Zz.N.encoder (`Channel ic) `Manual ~q ~w ~level:0 in
+  let decoder = Zz.M.decoder `Manual ~o ~allocate:(fun bits -> Dd.make_window ~bits) in
+  let os = Dd.bigstring_create io_buffer_size in
+  let bf = Buffer.create 4096 in
+
+  let rec go_encode decoder encoder = match Zz.N.encode encoder with
+    | `Await _ -> assert false
+    | `Flush encoder ->
+      let len = io_buffer_size - Zz.N.dst_rem encoder in
+      go_decode (Zz.M.src decoder os 0 len) encoder
+    | `End encoder ->
+      let len = io_buffer_size - Zz.N.dst_rem encoder in
+      go_decode (Zz.M.src decoder os 0 len) encoder
+  and go_decode decoder encoder = match Zz.M.decode decoder with
+    | `Await decoder ->
+      go_encode decoder (Zz.N.dst encoder os 0 io_buffer_size)
+    | `Flush decoder ->
+      let len = io_buffer_size - Zz.M.dst_rem decoder in
+      for i = 0 to pred len do Buffer.add_char bf o.{i} done ;
+      go_decode (Zz.M.flush decoder) encoder
+    | `End decoder ->
+      let len = io_buffer_size - Zz.M.dst_rem decoder in
+      for i = 0 to pred len do Buffer.add_char bf o.{i} done ;
+      Buffer.contents bf
+    | `Malformed _ -> Buffer.contents bf in
+
+  let contents = go_decode decoder (Zz.N.dst encoder os 0 io_buffer_size) in
+  seek_in ic 0 ;
+
+  let rec slow_compare pos =
+    match input_char ic with
+    | chr ->
+      if pos >= String.length contents then Fmt.invalid_arg "Reach end of contents" ;
+      if contents.[pos] <> chr
+      then Fmt.invalid_arg "Contents differ at %08x\n%!" pos ; slow_compare (succ pos)
+    | exception End_of_file ->
+      if pos <> String.length contents
+      then Fmt.invalid_arg "Lengths differ: (contents: %d, file: %d)" (String.length contents) pos in
+
+  slow_compare 0
+
+let test_corpus_with_zlib filename =
+  Alcotest.test_case filename `Slow @@ fun () ->
+  let ic = open_in Filename.(concat "corpus" filename) in
+  zlib_compress_and_uncompress ic ; close_in ic
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -1067,4 +1116,8 @@ let () =
                  ; test_corpus "progl"
                  ; test_corpus "progp"
                  ; test_corpus "trans" ]
+    ; "zlib", [ test_corpus_with_zlib "bib"
+              ; test_corpus_with_zlib "book1"
+              ; test_corpus_with_zlib "book2"
+              ; test_corpus_with_zlib "geo" ]
     ; "hang", [ hang0 () ] ]

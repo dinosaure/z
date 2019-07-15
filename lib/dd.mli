@@ -7,6 +7,8 @@ val bigstring_create : int -> bigstring
 val bigstring_length : bigstring -> int
 val io_buffer_size : int
 
+val output_bigstring : out_channel -> bigstring -> int -> int -> unit
+
 (** {2 Window} *)
 
 type window

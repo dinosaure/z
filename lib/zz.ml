@@ -182,6 +182,7 @@ module M = struct
       | Dd { state; _ } ->
         let a = Dd.M.checksum state in
         let b = unsafe_get_uint32 d.i d.i_pos in
+
         if Optint.equal a (Optint.of_int32 b)
         then `End { d with i_pos= d.i_pos + 4 }
         else err_invalid_checksum a b d
@@ -292,33 +293,49 @@ module N = struct
 
   type ret = [ `Await of encoder | `End of encoder | `Flush of encoder ]
 
+  let o_rem e = e.o_len - e.o_pos + 1
+  let i_rem s = s.i_len - s.i_pos + 1
+
   let eoi e =
     { e with i= bigstring_empty
            ; i_pos= 0
            ; i_len= min_int }
 
+  let src e s j l =
+    if (j < 0 || l < 0 || j + l > bigstring_length s)
+    then invalid_bounds j l ;
+    ( match e.state with
+            | Hd -> ()
+            | Dd -> Dd.L.src e.s s j l ) ;
+    if (l == 0) then eoi e
+    else { e with i= s; i_pos= j; i_len= j + l - 1 }
+
+  let dst e s j l =
+    if (j < 0 || l < 0 || j + l > bigstring_length s)
+    then invalid_bounds j l ;
+    ( ( match e.state with
+          | Hd -> ()
+          | Dd -> Dd.N.dst e.e s j l )
+    ; { e with o= s; o_pos= j; o_len= j + l - 1 } )
+
   let refill k e = match e.src with
     | `String _ -> k (eoi e)
     | `Channel ic ->
       let res = input_bigstring ic e.i 0 (bigstring_length e.i) in
-      Dd.L.src e.s e.i 0 res ; k { e with i_pos= 0
-                                        ; i_len= res - 1 }
+      k (src e e.i 0 res)
     | `Manual -> `Await { e with k }
 
   let flush k e = match e.dst with
     | `Buffer b ->
       for i = 0 to bigstring_length e.o - Dd.N.dst_rem e.e
       do Buffer.add_char b e.o.{i} done ;
-      k e
+      k (dst e e.o 0 (bigstring_length e.o))
     | `Channel oc ->
       output_bigstring oc e.o 0 (bigstring_length e.o - Dd.N.dst_rem e.e) ;
-      k e
+      k (dst e e.o 0 (bigstring_length e.o))
     | `Manual -> `Flush { e with k }
 
   let identity e = `End e
-
-  let o_rem e = e.o_len - e.o_pos + 1
-  let i_rem s = s.i_len - s.i_pos + 1
 
   let rec checksum e =
     let k e =
@@ -378,22 +395,6 @@ module N = struct
         | `Block -> assert false (* XXX(dinosaure): should never occur! *) in
 
       compress e
-
-  let src e s j l =
-    if (j < 0 || l < 0 || j + l > bigstring_length s)
-    then invalid_bounds j l ;
-    ( match e.state with
-            | Hd -> ()
-            | Dd -> Dd.L.src e.s s j l ) ;
-    if (l == 0) then eoi e
-    else { e with i= s; i_pos= j; i_len= j + l - 1 }
-
-  let dst e s j l =
-    if (j < 0 || l < 0 || j + l > bigstring_length s) then invalid_bounds j l ;
-    ( ( match e.state with
-          | Hd -> ()
-          | Dd -> Dd.N.dst e.e s j l )
-    ; { e with o= s; o_pos= j; o_len= j + l - 1 } )
 
   let src_rem = i_rem
   let dst_rem = o_rem

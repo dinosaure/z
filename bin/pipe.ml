@@ -14,6 +14,7 @@ let run_inflate () =
       let len = io_buffer_size - M.dst_rem decoder in
       Bs.bigstring_output Unix.stdout o 0 len ; M.flush decoder ; go ()
     | `Malformed err ->
+      Fmt.epr "%s\n%!" err ;
       `Error err
     | `End ->
       let len = io_buffer_size - M.dst_rem decoder in
@@ -80,6 +81,7 @@ let run_zlib_inflate () =
       let len = io_buffer_size - M.dst_rem decoder in
       Bs.bigstring_output Unix.stdout o 0 len ; M.flush decoder |> go
     | `Malformed err ->
+      Fmt.epr "%s\n%!" err ;
       `Error err
     | `End decoder ->
       let len = io_buffer_size - M.dst_rem decoder in

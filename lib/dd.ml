@@ -472,7 +472,8 @@ module Window = struct
     then ( blit2 w w_off t.raw msk o o_off pre
          ; update t
          ; blit2 w (w_off + pre) t.raw 0 o (o_off + pre) rst )
-    else blit2 w w_off t.raw msk o o_off len ;
+    else ( blit2 w w_off t.raw msk o o_off len
+         ; if mask (t.w + len) == 0 then update t ) ;
     t.w <- t.w + len
 
   let fill t v o o_off len =
@@ -483,25 +484,16 @@ module Window = struct
     then ( fill2 v t.raw msk o o_off pre
          ; update t
          ; fill2 v t.raw 0 o (o_off + pre) rst )
-    else fill2 v t.raw msk o o_off len ;
+    else ( fill2 v t.raw msk o o_off len
+         ; if mask (t.w + len) == 0 then update t ) ;
     t.w <- t.w + len
 
   let tail w =
     let msk = mask w.w in
     if msk > 0
     then ( let c = Checkseum.Adler32.unsafe_digest_bigstring w.raw 0 msk w.c in
+           w.w <- 0 ; (* XXX(dinosaure): reset! *)
            w.c <- c )
-
-  let feed t buf off len =
-    let msk = mask t.w in
-    let pre = max - msk in
-    let rst = len - pre in
-    ( if rst > 0
-      then ( unsafe_blit buf off t.raw msk pre
-           ; update t
-           ; unsafe_blit buf (off + pre) t.raw 0 rst )
-      else unsafe_blit buf off t.raw msk len ) ;
-    t.w <- t.w + len
 
   let checksum w = w.c
 end
@@ -1274,6 +1266,8 @@ module M = struct
     | Flat -> flat d
     | Checkseum -> d.k d
     | End_of_inflate ->
+      Window.tail d.w ;
+
       if d.bits >= 8
       then ( d.i_pos <- d.i_pos - 1 ; d.bits <- d.bits - 8 ; d.hold <- 0 (* XXX(dinosaure): keep? *) ) ;
       End
@@ -2392,7 +2386,6 @@ module W = struct
 
   let tail w =
     let msk = mask w.w in
-
     if msk > 0
     then
          ( let c = Checkseum.Adler32.unsafe_digest_bigstring w.raw 0 msk w.c in
