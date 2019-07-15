@@ -4,6 +4,7 @@ type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.
 type optint = Optint.t
 
 val bigstring_create : int -> bigstring
+val bigstring_length : bigstring -> int
 val io_buffer_size : int
 
 (** {2 Window} *)
@@ -17,6 +18,8 @@ val make_window : bits:int -> window
    {ul
    {- process a copy from a distance by the decoder.}
    {- generate a copy from the compression algorithm.}}*)
+
+val window_bits : window -> int
 
 (** {2 Decoder} *)
 
@@ -110,7 +113,9 @@ module L : sig
   val literals : state -> literals
   val distances : state -> distances
 
+  val checksum : state -> optint
   val src : state -> bigstring -> int -> int -> unit
+  val src_rem : state -> int
   val compress : state -> decode
   val state : src -> w:window -> q:B.t -> state
 end

@@ -1,7 +1,7 @@
 (library
  (name dd)
  (modules dd)
- (libraries checkseum fmt))
+ (libraries hxd.string checkseum fmt))
 
 (library
  (name zz)

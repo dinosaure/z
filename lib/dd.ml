@@ -289,6 +289,17 @@ let make_window ~bits =
   if bits >= 8 && bits <= 15 then bigstring_create (1 lsl 15)
   else invalid_arg "bits MUST be between 8 and 15"
 
+let ffs n =
+  if n = 0 then Fmt.invalid_arg "ffs on 0"
+  else
+    ( let t = ref 1 in
+      let r = ref 0 in
+
+      while n land !t = 0 do t := !t lsl 1 ; incr r done
+    ; !r )
+
+let window_bits w = ffs (bigstring_length w)
+
 module Lookup = struct
   (* Used as inflate to store lookup.[bit-sequence] = [len << 15 | byte].
      Used as deflate to store lookup.[byte] = [len << 15 | bit-sequence]. *)
@@ -767,7 +778,6 @@ module M = struct
         else refill (c_bytes n k) d (* allocation *) )
 
   let checksum d =
-    Window.tail d.w ;
     Window.checksum d.w
 
   let rec flat d =
@@ -2382,9 +2392,13 @@ module W = struct
 
   let tail w =
     let msk = mask w.w in
+
     if msk > 0
-    then ( let c = Checkseum.Adler32.unsafe_digest_bigstring w.raw 0 msk w.c in
-           w.c <- c )
+    then
+         ( let c = Checkseum.Adler32.unsafe_digest_bigstring w.raw 0 msk w.c in
+           w.w <- 0
+         ; w.r <- 0 (* XXX(dinosaure): reset! *)
+         ; w.c <- c )
 
   let feed t buf off len =
     let msk = mask t.w in
@@ -2394,11 +2408,11 @@ module W = struct
       then ( unsafe_blit buf off t.raw msk pre
            ; update t
            ; unsafe_blit buf (off + pre) t.raw 0 rst )
-      else unsafe_blit buf off t.raw msk len ) ;
+      else ( unsafe_blit buf off t.raw msk len
+           ; if mask (t.w + len) == 0 then update t ) ) ;
     t.w <- t.w + len
 
   let junk t len = t.r <- t.r + len
-
   let checksum w = w.c
 end
 
@@ -2432,6 +2446,7 @@ module L = struct
 
   let literals s = s.l
   let distances s = s.d
+  let checksum s = W.checksum s.w
 
   let eoi s =
     s.i <- bigstring_empty ;
@@ -2462,6 +2477,8 @@ module L = struct
   (* remaining bytes to read [s.i]. *)
   let i_rem s = s.i_len - s.i_pos + 1
   [@@inline]
+
+  let src_rem s = i_rem s
 
   let pp_chr = Fmt.using (function '\032' .. '\126' as x -> x | _ -> '.') Fmt.char
 

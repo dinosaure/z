@@ -14,7 +14,7 @@ let run_inflate () =
       let len = io_buffer_size - M.dst_rem decoder in
       Bs.bigstring_output Unix.stdout o 0 len ; M.flush decoder ; go ()
     | `Malformed err ->
-      Fmt.epr "%s.\n%!" err ; `Error err
+      `Error err
     | `End ->
       let len = io_buffer_size - M.dst_rem decoder in
       if len > 0 then Bs.bigstring_output Unix.stdout o 0 len ;
@@ -32,6 +32,7 @@ let run_deflate () =
   let partial k encoder =
     let len = io_buffer_size - N.dst_rem encoder in
     let tmp = Bigstringaf.substring o ~off:0 ~len in
+
     if len > 0 then output_string stdout tmp ;
     N.dst encoder o 0 io_buffer_size ;
     k @@ N.encode encoder `Await in
@@ -57,7 +58,8 @@ let run_deflate () =
   and pending = function
     | `Partial -> partial pending encoder
     | `Block -> assert false (* never occur! *)
-    | `Ok -> last @@ N.encode encoder `Flush
+    | `Ok ->
+      last @@ N.encode encoder `Flush
   and last = function
     | `Partial -> partial last encoder
     | `Ok -> `Ok ()
@@ -65,7 +67,7 @@ let run_deflate () =
 
   compress ()
 
-let run_zlib_deflate () =
+let run_zlib_inflate () =
   let open Zz in
   let allocate bits = Dd.make_window ~bits in
   let decoder = M.decoder `Manual ~o ~allocate in
@@ -85,9 +87,27 @@ let run_zlib_deflate () =
       `Ok () in
   go decoder
 
+let run_zlib_deflate () =
+  let open Zz in
+  let encoder = N.encoder `Manual `Manual ~q ~w ~level:0 in
+
+  let rec go encoder = match N.encode encoder with
+    | `Await encoder ->
+      let len = Bs.bigstring_input Unix.stdin i 0 io_buffer_size in
+      N.src encoder i 0 len |> go
+    | `Flush encoder ->
+      let len = io_buffer_size - N.dst_rem encoder in
+      Bs.bigstring_output Unix.stdout o 0 len ;
+      N.dst encoder o 0 io_buffer_size |> go
+    | `End encoder ->
+      let len = io_buffer_size - N.dst_rem encoder in
+      if len > 0 then Bs.bigstring_output Unix.stdout o 0 len ;
+      `Ok () in
+  N.dst encoder o 0 io_buffer_size |> go
+
 let run deflate format = match format with
   | `Deflate -> if deflate then run_deflate () else run_inflate ()
-  | `Zlib -> if deflate then assert false else run_zlib_deflate ()
+  | `Zlib -> if deflate then run_zlib_deflate () else run_zlib_inflate ()
   | `Gzip -> assert false
 
 open Cmdliner
