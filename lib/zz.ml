@@ -183,12 +183,14 @@ module M = struct
         let a = Dd.M.checksum state in
         let b = unsafe_get_uint32 d.i d.i_pos in
 
-        if Optint.equal a (Optint.of_int32 b)
+        if Optint.to_int32 a = b (* FIXME: Optint.equal a (Optint.of_int32 b) bugs! *)
         then `End { d with i_pos= d.i_pos + 4 }
         else err_invalid_checksum a b d
       | Hd _ -> assert false in
+
     if i_rem d >= 4
-    then k d else ( if i_rem d < 0 then err_unexpected_end_of_input d else refill checksum d )
+    then k d
+    else ( if i_rem d < 0 then err_unexpected_end_of_input d else refill checksum d )
 
   let rec header d =
     let k d = match d.dd with

@@ -1025,7 +1025,7 @@ let zlib_compress_and_uncompress ic =
       let len = io_buffer_size - Zz.M.dst_rem decoder in
       for i = 0 to pred len do Buffer.add_char bf o.{i} done ;
       Buffer.contents bf
-    | `Malformed _ -> Buffer.contents bf in
+    | `Malformed err -> failwith err in
 
   let contents = go_decode decoder (Zz.N.dst encoder os 0 io_buffer_size) in
   seek_in ic 0 ;
@@ -1119,5 +1119,15 @@ let () =
     ; "zlib", [ test_corpus_with_zlib "bib"
               ; test_corpus_with_zlib "book1"
               ; test_corpus_with_zlib "book2"
-              ; test_corpus_with_zlib "geo" ]
+              ; test_corpus_with_zlib "geo"
+              ; test_corpus_with_zlib "news"
+              ; test_corpus_with_zlib "obj1"
+              ; test_corpus_with_zlib "obj2"
+              ; test_corpus_with_zlib "paper1"
+              ; test_corpus_with_zlib "paper2"
+              ; test_corpus_with_zlib "pic"
+              ; test_corpus_with_zlib "progc"
+              ; test_corpus_with_zlib "progl"
+              ; test_corpus_with_zlib "progp"
+              ; test_corpus_with_zlib "trans" ]
     ; "hang", [ hang0 () ] ]

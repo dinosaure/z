@@ -863,7 +863,9 @@ module M = struct
           c_put_byte value k d
         else if value == 256
         then ( if d.last
-               then ( d.s <- End_of_inflate ; End )
+               then ( d.s <- End_of_inflate ; K )
+               (* XXX(dinosaure): [K] is needed here to save remaining byte(s) correctly
+                  in [End_of_inflate] state. *)
                else ( d.s <- Header ; K ) )
         else ( d.l <- value - 257
              ; d.jump <- Extra_length
@@ -926,7 +928,7 @@ module M = struct
         let rst = len - pre in
         if rst > 0
         then ( Window.blit d.w d.w.Window.raw off d.o d.o_pos pre
-                ; Window.blit d.w d.w.Window.raw 0 d.o (d.o_pos + pre) rst )
+             ; Window.blit d.w d.w.Window.raw 0 d.o (d.o_pos + pre) rst )
         else Window.blit d.w d.w.Window.raw off d.o d.o_pos len ;
         d.o_pos <- d.o_pos + len ;
         if d.l - len == 0
@@ -1077,7 +1079,9 @@ module M = struct
 
       if d.last
       then ( d.s <- End_of_inflate
-           ; End )
+           ; K )
+      (* XXX(dinosaure): [K] is needed here to save remaining byte(s) correctly
+         in [End_of_inflate] state. *)
       else ( d.s <- Header
            ; K )
        | Invalid_distance -> err_invalid_distance d
