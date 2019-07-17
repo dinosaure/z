@@ -39,7 +39,8 @@ let deflate i i_len r r_len =
       let len = (r_len - !r_pos) - N.dst_rem encoder in
       !r_pos + len
   and pending encoder = match N.encode encoder with
-    | `Await _ -> failwith "Unexpected `Await operation on an atomic deflate computation"
+    | `Await encoder -> N.src encoder Dd.bigstring_empty 0 0 |> pending
+                        (* XXX(dinosaure): should not appear! *)
     | `Flush encoder ->
       let len = (r_len - !r_pos) - N.dst_rem encoder in
       r_pos := !r_pos + len ;
