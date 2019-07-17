@@ -124,6 +124,7 @@ module M = struct
     ; i : bigstring
     ; i_pos : int
     ; i_len : int
+    ; wr : int
     ; hd : int
     ; dd : dd
     ; fdict : bool
@@ -222,12 +223,16 @@ module M = struct
     | Hd _ -> header d
     | Dd { state; o; _ } ->
       match Dd.M.decode state with
-      | `Flush -> `Flush d
+      | `Flush ->
+        let len = bigstring_length o - Dd.M.dst_rem state in
+        (* XXX(dinosaure): protect counter to a recall? TODO *)
+        `Flush { d with wr= d.wr + len }
       | `Await -> refill decode d
       | `End ->
-         if bigstring_length o - Dd.M.dst_rem state > 0
-         then flush checksum d
-         else checksum { d with i_pos= d.i_pos + (i_rem d - Dd.M.src_rem state) }
+        let len = bigstring_length o - Dd.M.dst_rem state in
+        if len > 0
+        then flush checksum { d with wr= d.wr + len }
+        else checksum { d with i_pos= d.i_pos + (i_rem d - Dd.M.src_rem state) }
       | `Malformed err -> `Malformed err
 
   let src d s j l =
@@ -256,6 +261,8 @@ module M = struct
     | Hd _ -> Fmt.invalid_arg "Invalid state to know bytes remaining"
     | Dd { state; _ } -> Dd.M.dst_rem state
 
+  let write { wr; _ } = wr
+
   let decoder src ~o ~allocate =
     let i, i_pos, i_len = match src with
       | `Manual -> bigstring_empty, 1, 0
@@ -263,6 +270,7 @@ module M = struct
       | `Channel _ -> bigstring_create io_buffer_size, 1, 0 in
     { i; i_pos; i_len
     ; src
+    ; wr= 0
     ; hd= 0
     ; dd= Hd { allocate; o; }
     ; fdict= false

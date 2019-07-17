@@ -3,6 +3,7 @@
 type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 type optint = Optint.t
 
+val bigstring_empty : bigstring
 val bigstring_create : int -> bigstring
 val bigstring_length : bigstring -> int
 val io_buffer_size : int

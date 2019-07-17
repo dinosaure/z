@@ -6,15 +6,18 @@ PACKAGES=bigstringaf,optint,checkseum.c,fmt,ctypes.stubs,ctypes.foreign
 
 # The files used to build the stub generator.
 GENERATOR_FILES=$(BUILDDIR)/lib/dd.cmx \
+		$(BUILDDIR)/lib/zz.cmx \
                 $(BUILDDIR)/rev/bindings.cmx \
                 $(BUILDDIR)/stub_generator/generate.cmx
 
 # The files from which we'll build a shared library.
-INTFILES=$(BUILDIR)/lib/dd.cmi
+INTFILES=$(BUILDDIR)/lib/dd.cmi \
+         $(BUILDDIR)/lib/zz.cmi
 
 LIBFILES=$(BUILDDIR)/lib/dd.cmx \
-         $(BUILDDIR)/rev/bindings.cmx	\
-         $(BUILDDIR)/generated/miniz_bindings.cmx	\
+	 $(BUILDDIR)/lib/zz.cmx \
+         $(BUILDDIR)/rev/bindings.cmx \
+         $(BUILDDIR)/generated/miniz_bindings.cmx \
          $(BUILDDIR)/rev/apply_bindings.cmx \
          $(BUILDDIR)/generated/miniz.o
 
@@ -41,7 +44,6 @@ GENERATOR=$(BUILDDIR)/generate$(EXTEXE)
 all: sharedlib
 
 sharedlib: $(BUILDDIR)/libminiz$(EXTDLL)
-
 
 ifeq ($(OSTYPE),$(filter $(OSTYPE),Win32 Cygwin))
 $(BUILDDIR)/libminiz$(EXTDLL): $(CAML_INIT) $(LIBFILES)
