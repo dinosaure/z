@@ -48,7 +48,7 @@ let deflate i i_len r r_len =
     | `End encoder ->
       let len = (r_len - !r_pos) - N.dst_rem encoder in
       !r_pos + len in
-  N.src encoder i 0 i_len |> encode
+  N.src encoder i 0 i_len |> fun encoder -> N.dst encoder r 0 r_len |> encode
 
 module Stubs (I : Cstubs_inverted.INTERNAL) = struct
   let () =

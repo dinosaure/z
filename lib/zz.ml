@@ -370,9 +370,10 @@ module N = struct
         let header = header lor (e.level lsl 6) in
         let header = header + (31 - (header mod 31)) in
         unsafe_set_uint16 e.o e.o_pos header ;
+        Dd.L.src e.s e.i e.i_pos (i_rem e) ;
         Dd.N.dst e.e e.o (e.o_pos + 2) (o_rem e - 2) ;
         encode { e with state= Dd; o_pos= e.o_pos + 2 } in
-      if o_rem e >= 2 then k e else refill encode e
+      if o_rem e >= 2 then k e else flush encode e
     | Dd ->
       let rec partial k e =
         k e (Dd.N.encode e.e `Await)
