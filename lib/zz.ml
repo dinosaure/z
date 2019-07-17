@@ -156,24 +156,26 @@ module M = struct
 
   let i_rem d = d.i_len - d.i_pos + 1
 
+  let eoi d =
+    { d with i= bigstring_empty
+           ; i_pos= 0
+           ; i_len= min_int }
+
   let refill k d = match d.dd, d.src with
     | Dd { state; _ }, `String _ ->
-      Dd.M.src state bigstring_empty 0 0 ; k d
+      Dd.M.src state bigstring_empty 0 0 ;
+      k (eoi d)
     | Dd { state; _ }, `Channel ic ->
       let res = input_bigstring ic d.i 0 (bigstring_length d.i) in
       Dd.M.src state d.i 0 res ; k d
     | (Dd _ | Hd _), `Manual ->
       `Await { d with k }
     | Hd _, `String _ ->
-      k { d with i= bigstring_empty
-               ; i_pos= 0
-               ; i_len= min_int }
+      k (eoi d)
     | Hd _, `Channel ic ->
       let res = input_bigstring ic d.i 0 (bigstring_length d.i) in
       if res == 0
-      then k { d with i= bigstring_empty
-                    ; i_pos= 0
-                    ; i_len= min_int }
+      then k (eoi d)
       else k { d with i_pos= 0; i_len= res - 1 }
 
   let flush k d = `Flush { d with k }
@@ -240,9 +242,7 @@ module M = struct
     then invalid_bounds j l ;
     let d =
       if (l == 0)
-      then { d with i= bigstring_empty
-                  ; i_pos= 0
-                  ; i_len= min_int }
+      then eoi d
       else
         { d with i= s
                ; i_pos= j
