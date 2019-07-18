@@ -3,8 +3,6 @@ open Foreign
 open Zz
 
 let w = Dd.make_window ~bits:15
-let o = Dd.bigstring_create Dd.io_buffer_size
-let i = Dd.bigstring_create Dd.io_buffer_size
 let q = Dd.B.create 8192
 
 let inflate i i_len r r_len =

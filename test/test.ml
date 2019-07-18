@@ -1027,13 +1027,14 @@ let zlib_compress_and_uncompress ic =
       Buffer.contents bf
     | `Malformed err -> failwith err in
 
-  let contents = go_decode decoder (Zz.N.dst encoder os 0 io_buffer_size) in
+  let contents = go_decode decoder encoder in
   seek_in ic 0 ;
 
   let rec slow_compare pos =
     match input_char ic with
     | chr ->
-      if pos >= String.length contents then Fmt.invalid_arg "Reach end of contents" ;
+      if pos >= String.length contents
+      then Fmt.invalid_arg "Reach end of contents" ;
       if contents.[pos] <> chr
       then Fmt.invalid_arg "Contents differ at %08x\n%!" pos ; slow_compare (succ pos)
     | exception End_of_file ->

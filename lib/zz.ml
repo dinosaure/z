@@ -314,9 +314,7 @@ module N = struct
   let src e s j l =
     if (j < 0 || l < 0 || j + l > bigstring_length s)
     then invalid_bounds j l ;
-    ( match e.state with
-            | Hd -> ()
-            | Dd -> Dd.L.src e.s s j l ) ;
+    Dd.L.src e.s s j l ;
     if (l == 0) then eoi e
     else { e with i= s; i_pos= j; i_len= j + l - 1 }
 
@@ -370,7 +368,8 @@ module N = struct
         let header = header lor (e.level lsl 6) in
         let header = header + (31 - (header mod 31)) in
         unsafe_set_uint16 e.o e.o_pos header ;
-        Dd.L.src e.s e.i e.i_pos (i_rem e) ;
+        if i_rem e > 0 then Dd.L.src e.s e.i e.i_pos (i_rem e) ;
+        (* XXX(dinosaure): we need to protect [e.s] against EOI signal. *)
         Dd.N.dst e.e e.o (e.o_pos + 2) (o_rem e - 2) ;
         encode { e with state= Dd; o_pos= e.o_pos + 2 } in
       if o_rem e >= 2 then k e else flush encode e
