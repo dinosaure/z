@@ -30,6 +30,31 @@ let invalid_encode () = Fmt.invalid_arg "expected `Await encode"
 
 let output_bigstring _ _ _ _ = ()
 
+external bytes_unsafe_get_uint32 : bytes -> int -> int32 = "%caml_bytes_get32"
+let bytes_unsafe_get_uint8 : bytes -> int -> int =
+  fun buf off -> Char.code (Bytes.get buf off)
+
+let input_bigstring ic buf off len =
+  let tmp = Bytes.create len in
+  let res = input ic tmp 0 len in
+
+  let len0 = res land 3 in
+  let len1 = res asr 2 in
+
+  for i = 0 to len1 - 1
+  do
+    let i = i * 4 in
+    let v = bytes_unsafe_get_uint32 tmp i in
+    unsafe_set_uint32 buf (off + i) v
+  done ;
+
+  for i = 0 to len0 - 1
+  do
+    let i = len1 * 4 + i in
+    let v = bytes_unsafe_get_uint8 tmp i in
+    unsafe_set_uint8 buf (off + i) v
+  done ; res
+
 let slow_blit src src_off dst dst_off len =
   for i = 0 to len - 1
   do
@@ -58,6 +83,30 @@ let blit src src_off dst dst_off len =
       unsafe_set_uint8 dst (dst_off + i) v ;
     done
 
+external string_unsafe_get_uint32 : string -> int -> int32 = "%caml_string_get32"
+let string_unsafe_get_uint8 : string -> int -> int =
+  fun buf off -> Char.code (String.get buf off)
+
+let bigstring_of_string v =
+  let len = String.length v in
+  let res = bigstring_create len in
+  let len0 = len land 3 in
+  let len1 = len asr 2 in
+
+  for i = 0 to len1 - 1
+  do
+    let i = i * 4 in
+    let v = string_unsafe_get_uint32 v i in
+    unsafe_set_uint32 res i v
+  done ;
+
+  for i = 0 to len0 - 1
+  do
+    let i = len1 * 4 + i in
+    let v = string_unsafe_get_uint8 v i in
+    unsafe_set_uint8 res i v
+  done ; res
+
 let io_buffer_size = 65536
 
 external ( < ) : 'a -> 'a -> bool = "%lessthan"
@@ -69,10 +118,12 @@ let ( < ) (x : int) y = x < y [@@inline]
 let ( <= ) (x : int) y = x <= y [@@inline]
 
 module M = struct
+  type src = [ `Channel of in_channel | `Manual | `String of string ]
   type decode = [ `Await | `Destination of int | `End | `Malformed of string ]
 
   type decoder =
-    { src : bigstring
+    { source : bigstring
+    ; src : src
     ; mutable dst : bigstring
     ; mutable i : bigstring
     ; mutable i_pos : int
@@ -93,7 +144,7 @@ module M = struct
             incr p
           ; len := !len lor ((cmd land 0x7f) lsl !i)
           ; i := !i + 7
-          ; cmd land 0x80 = 0 && !p <= top )
+          ; cmd land 0x80 != 0 && !p <= top )
     do () done ; (!p - off, !len)
   [@@inline]
 
@@ -130,12 +181,23 @@ module M = struct
            ; d.s <- Cmd )
     | _ -> Fmt.invalid_arg "Invalid call of dst"
 
+  (* get new input in [d.i] and [k]ontinue. *)
+  let refill k d = match d.src with
+    | `String _ ->
+      eoi d ; k d
+    | `Channel ic ->
+      let res = input_bigstring ic d.i 0 (bigstring_length d.i) in
+      src d d.i 0 res ; k d
+    | `Manual -> Await
+
   let required =
     let a = [| 0; 1; 1; 2; 1; 2; 2; 3; 1; 2; 2; 3; 2; 3; 3; 4 |] in
-    fun x -> a.(x land 0xf) + a.(x lsr 4) - 1 (* XXX(dinosaure): uncount 0x80 *)
+    fun x -> a.(x land 0xf) + a.(x lsr 4)
 
   let enough d = match d.s with
-    | Cp cmd -> i_rem d >= required cmd
+    | Cp cmd ->
+      Fmt.epr ">>> required: %d.\n%!" (required (cmd land 0x7f)) ;
+      i_rem d >= required (cmd land 0x7f)
     | It len -> i_rem d >= len
     | _ -> assert false (* XXX(dinosaure): [enough] is called only after a [d.s <- (It _ | Cp _)]. *)
 
@@ -177,11 +239,11 @@ module M = struct
            cp_len := !cp_len lor (v lsl 16)
          ; incr p ) ;
 
-    blit d.src !cp_off d.dst d.o_pos !cp_len ;
+    blit d.source !cp_off d.dst d.o_pos !cp_len ;
     d.i_pos <- !p ;
     d.o_pos <- d.o_pos + !cp_len ;
     d.s <- Cmd ;
-    cmd d
+    decode_k d
 
   and it d =
     let[@warning "-8"] It len = d.s in
@@ -189,7 +251,7 @@ module M = struct
     d.i_pos <- d.i_len + len ;
     d.o_pos <- d.o_pos + len ;
     d.s <- Cmd ;
-    cmd d
+    decode_k d
 
   and cmd d =
     let cmd = unsafe_get_uint8 d.i d.i_pos in
@@ -203,14 +265,14 @@ module M = struct
         then ( if cmd land 0x80 != 0 then cp d else it d )
         else Await )
 
-  let decode_k d =
+  and decode_k d =
     let rem = i_rem d in
 
     if rem <= 0
-    then ( if rem < 0 then End else Await )
+    then ( if rem < 0 then End else refill decode_k d )
     else match d.s with
     | Header ->
-      if rem < 4 then Fmt.invalid_arg "Not enough space" ; (* TODO: [malformedf]? *)
+      if rem < 2 then Fmt.invalid_arg "Not enough space" ; (* TODO: [malformedf]? *)
       let x, src_len = variable_length d.i d.i_pos d.i_len in
       let y, dst_len = variable_length d.i (d.i_pos + x) d.i_len in
 
@@ -218,11 +280,12 @@ module M = struct
       d.src_len <- src_len ;
       d.dst_len <- dst_len ;
 
-      if d.src_len != bigstring_length d.src then malformedf "Invalid source"
+      if d.src_len != bigstring_length d.source
+      then malformedf "Invalid source"
       else ( d.s <- Dst ; Stop )
     | Dst -> Stop
     | Cmd -> cmd d
-    | Cp cmd -> if required cmd <= rem then cp d else Await
+    | Cp cmd -> if required (cmd land 0x7f) <= rem then cp d else Await
     | It len -> if len <= rem then cp d else Await
 
   let decode d = match decode_k d with
@@ -231,9 +294,13 @@ module M = struct
     | End -> `End
     | Malformed err -> `Malformed err
 
-  let decoder src =
-    let i, i_pos, i_len = bigstring_empty, 1, 0 in
+  let decoder ~source src =
+    let i, i_pos, i_len = match src with
+      | `Manual -> bigstring_empty, 1, 0
+      | `String x -> bigstring_of_string x, 0, String.length x - 1
+      | `Channel _ -> bigstring_create io_buffer_size, 1, 0 in
     { src
+    ; source
     ; dst= bigstring_empty
     ; i
     ; i_pos
@@ -250,13 +317,17 @@ module N = struct
 
   type encoder =
     { dst : dst
+    ; src_len : int
+    ; dst_len : int
     ; mutable o : bigstring
     ; mutable o_pos : int
     ; mutable o_max : int
-    ; t : bigstring (* XXX(dinosaure): normalize to [bytes]? *)
+    ; t : bigstring (* XXX(dinosaure): [bytes]? *)
     ; mutable t_pos : int
     ; mutable t_max : int
+    ; mutable s : s
     ; mutable k : encoder -> encode -> [ `Ok | `Partial ] }
+  and s = Header | Contents
 
   let o_rem e = e.o_max - e.o_pos + 1 [@@inline]
 
@@ -266,6 +337,8 @@ module N = struct
     e.o <- s ;
     e.o_pos <- j ;
     e.o_max <- j + l - 1
+
+  let dst_rem encoder = o_rem encoder
 
   let partial k e = function
     | `Await -> k e
@@ -309,8 +382,8 @@ module N = struct
     then ( blit e rem ; flush (t_flush k) e )
     else ( blit e len ; k e )
 
-  let rec encode e v =
-    let k e = e.k <- encode ; `Ok in
+  let rec encode_contents e v =
+    let k e = e.k <- encode_contents ; `Ok in
     match v with
     | `Await -> k e
     | `Copy (off, len) ->
@@ -320,8 +393,9 @@ module N = struct
 
       let s, j, k =
         if rem < required
-        then ( t_range e (required - 1) ; e.t, 0, t_flush k )
-        else let j = e.o_pos in ( e.o_pos <- e.o_pos + required - 1 ; e.o, j, k ) in
+        then ( t_range e (required + 1) ; e.t, 0, t_flush k )
+        else let j = e.o_pos in ( e.o_pos <- e.o_pos + required + 1
+                                ; e.o, j, k ) in
 
       unsafe_set_uint8 s j (cmd lor 0x80) ;
       let pos = ref (j + 1) in
@@ -333,22 +407,61 @@ module N = struct
       let len = String.length p in
       let s, j, k =
         if rem < len + 1
-        then ( t_range e len ; e.t, 0, t_flush k )
-        else let j = e.o_pos in ( e.o_pos <- e.o_pos + len ; e.o, j, k ) in
+        then ( t_range e (len + 1) ; e.t, 0, t_flush k )
+        else let j = e.o_pos in ( e.o_pos <- e.o_pos + len + 1
+                                ; e.o, j, k ) in
 
       unsafe_set_uint8 s j len ;
       unsafe_blit_from_string p 0 s (j + 1) len ;
       k e
     | `End -> flush k e
 
-  let encoder dst =
+  let store_variable_length buf off length =
+    let l = ref length in
+    let off = ref off in
+    while !l >= 0x80 do
+      unsafe_set_uint8 buf !off ((!l lor 0x80) land 0xff)
+    ; incr off
+    ; l := !l asr 7
+    done ; unsafe_set_uint8 buf !off !l
+
+  let needed length =
+    let l = ref length in
+    let o = ref 0 in
+    while !l >= 0x80 do incr o ; l := !l asr 7 done ; incr o ; !o
+  [@@inline]
+
+  let encode_header e v =
+    let k e = e.k <- encode_contents (* XXX(dinosaure): short-cut [encode]. *) ; e.s <- Contents ; e.k e v in
+    let ndd = needed e.src_len + needed e.dst_len in
+    let rem = o_rem e in
+    (* assert (ndd <= 10) ; *)
+    if rem >= ndd
+    then
+      ( store_variable_length e.o e.o_pos e.src_len
+      ; store_variable_length e.o (e.o_pos + needed e.src_len) e.dst_len
+      ; e.o_pos <- e.o_pos + ndd
+      ; k e )
+    else
+      ( t_range e ndd
+      ; store_variable_length e.t 0 e.src_len
+      ; store_variable_length e.t (needed e.src_len) e.dst_len
+      ; t_flush k e )
+
+  let encode e v = match e.s with
+    | Header -> encode_header e v
+    | Contents -> encode_contents e v
+
+  let encoder dst ~src_len ~dst_len =
     let o, o_pos, o_max = match dst with
       | `Manual -> bigstring_empty, 1, 0
       | `Buffer _
       | `Channel _ -> bigstring_create io_buffer_size, 0, io_buffer_size - 1 in
     { dst
+    ; src_len; dst_len
     ; o; o_pos; o_max
     ; t= bigstring_create 128
     ; t_pos= 1; t_max= 0
+    ; s= Header
     ; k= encode }
 end
