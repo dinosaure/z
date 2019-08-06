@@ -10,6 +10,11 @@
  (libraries checkseum.c rresult dd zz bs bigstringaf cmdliner))
 
 (executable
+ (name diff)
+ (modules diff)
+ (libraries duff fpath checkseum.c rresult h bs bigstringaf cmdliner))
+
+(executable
  (name example)
  (modules example)
  (libraries checkseum.c hxd.string dd))

@@ -312,3 +312,30 @@ let () =
   Crowbar.check_eq ~eq:String.equal ~pp:pp_string ~cmp:String.compare
     (Buffer.contents buf1) (String.concat "" inputs)
 
+let () =
+  Crowbar.add_test ~name:"diff" [ Crowbar.bytes; Crowbar.bytes ] @@ fun a b ->
+  let a = Bigstringaf.of_string a ~off:0 ~len:(String.length a) in
+  let b = Bigstringaf.of_string b ~off:0 ~len:(String.length b) in
+  let index = Duff.make ~copy:false a in
+  let delta = Duff.delta index b in
+
+  let buf = Buffer.create (Bigstringaf.length b) in
+  let encoder = H.N.encoder (`Buffer buf) ~src_len:(Bigstringaf.length a) ~dst_len:(Bigstringaf.length b) in
+  let f e = match H.N.encode encoder e with
+    | `Ok -> () | `Partial -> assert false in
+  let c = function
+    | Duff.Copy (off, len) -> `Copy (off, len)
+    | Duff.Insert (off, len) -> `Insert (Bigstringaf.substring a ~off ~len) in
+  List.iter f (List.map c delta @ [ `End ]) ;
+  let res = Buffer.contents buf in
+  let dst = ref H.bigstring_empty in
+  let decoder = H.M.decoder ~source:a (`String res) in
+  let rec go () = match H.M.decode decoder with
+    | `Await -> assert false
+    | `Destination len ->
+      dst := Bigstringaf.create len ;
+      Crowbar.check_eq ~eq:(=) ~pp:Fmt.int ~cmp:(-) len (Bigstringaf.length b) ;
+      H.M.dst decoder !dst 0 len ; go ()
+    | `End -> Bigstringaf.to_string !dst | `Malformed err -> Crowbar.fail err in
+  let c = go () in
+  Crowbar.check_eq ~eq:String.equal ~cmp:String.compare ~pp:pp_string (Bigstringaf.to_string b) c
