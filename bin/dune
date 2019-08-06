@@ -15,11 +15,6 @@
  (libraries duff fpath checkseum.c rresult h bs bigstringaf cmdliner))
 
 (executable
- (name example)
- (modules example)
- (libraries checkseum.c hxd.string dd))
-
-(executable
  (name zpipe)
  (modules zpipe)
  (libraries camlzip))
