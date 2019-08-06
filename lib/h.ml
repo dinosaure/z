@@ -1,5 +1,7 @@
 [@@@warning "-32-34"]
 
+let () = Printexc.record_backtrace true
+
 type bigstring = (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
 
 let bigstring_empty = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 0
@@ -10,11 +12,14 @@ let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_get_char : bigstring -> int -> char = "%caml_ba_ref_1"
+external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
+
+external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
 external unsafe_set_char : bigstring -> int -> char -> unit = "%caml_ba_set_1"
 
-external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
-external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
+external bytes_unsafe_set_uint32 : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
+let bytes_unsafe_set_uint8 : bytes -> int -> int -> unit = fun buf off v -> Bytes.set buf off (Char.unsafe_chr (v land 0xff))
 
 let unsafe_blit src src_off dst dst_off len =
   let a = bigstring_sub src src_off len in
@@ -28,7 +33,18 @@ let unsafe_blit_from_string src src_off dst dst_off len =
 let invalid_bounds off len = Fmt.invalid_arg "Out of bounds (off: %d, len: %d)" off len
 let invalid_encode () = Fmt.invalid_arg "expected `Await encode"
 
-let output_bigstring _ _ _ _ = ()
+let bigstring_to_string v =
+  let len = bigstring_length v in
+  let res = Bytes.create len in
+  for i = 0 to len - 1
+  do Bytes.set res i (unsafe_get_char v i) done ;
+  Bytes.unsafe_to_string res
+
+let output_bigstring oc buf off len =
+  (* XXX(dinosaure): stupidly slow! *)
+  let v = Bigarray.Array1.sub buf off len in
+  let v = bigstring_to_string v in
+  output_string oc v
 
 external bytes_unsafe_get_uint32 : bytes -> int -> int32 = "%caml_bytes_get32"
 let bytes_unsafe_get_uint8 : bytes -> int -> int =
@@ -195,9 +211,7 @@ module M = struct
     fun x -> a.(x land 0xf) + a.(x lsr 4)
 
   let enough d = match d.s with
-    | Cp cmd ->
-      Fmt.epr ">>> required: %d.\n%!" (required (cmd land 0x7f)) ;
-      i_rem d >= required (cmd land 0x7f)
+    | Cp cmd -> i_rem d >= required (cmd land 0x7f)
     | It len -> i_rem d >= len
     | _ -> assert false (* XXX(dinosaure): [enough] is called only after a [d.s <- (It _ | Cp _)]. *)
 
@@ -238,6 +252,7 @@ module M = struct
     then ( let v = unsafe_get_uint8 d.i !p in
            cp_len := !cp_len lor (v lsl 16)
          ; incr p ) ;
+    if !cp_len == 0 then cp_len := 0x10000 ;
 
     blit d.source !cp_off d.dst d.o_pos !cp_len ;
     d.i_pos <- !p ;
@@ -248,29 +263,29 @@ module M = struct
   and it d =
     let[@warning "-8"] It len = d.s in
     blit d.i d.i_pos d.dst d.o_pos len ;
-    d.i_pos <- d.i_len + len ;
+    d.i_pos <- d.i_pos + len ;
     d.o_pos <- d.o_pos + len ;
     d.s <- Cmd ;
     decode_k d
 
   and cmd d =
-    let cmd = unsafe_get_uint8 d.i d.i_pos in
+    let c = unsafe_get_uint8 d.i d.i_pos in
 
-    if cmd == 0 then malformedf "Invalid delta code (%02x)" cmd
+    if c == 0 then malformedf "Invalid delta code (%02x)" c
     else
-      ( d.s <- if cmd land 0x80 != 0 then Cp cmd else It cmd
+      ( d.s <- if c land 0x80 != 0 then Cp c else It c
       ; d.i_pos <- d.i_pos + 1
 
       ; if enough d
-        then ( if cmd land 0x80 != 0 then cp d else it d )
-        else Await )
+        then ( if c land 0x80 != 0 then cp d else it d )
+        else refill cmd d )
 
   and decode_k d =
     let rem = i_rem d in
 
     if rem <= 0
-    then ( if rem < 0 then End else refill decode_k d )
-    else match d.s with
+    then ( if rem < 0 then ( End ) else refill decode_k d )
+    else ( match d.s with
     | Header ->
       if rem < 2 then Fmt.invalid_arg "Not enough space" ; (* TODO: [malformedf]? *)
       let x, src_len = variable_length d.i d.i_pos d.i_len in
@@ -285,8 +300,8 @@ module M = struct
       else ( d.s <- Dst ; Stop )
     | Dst -> Stop
     | Cmd -> cmd d
-    | Cp cmd -> if required (cmd land 0x7f) <= rem then cp d else Await
-    | It len -> if len <= rem then cp d else Await
+    | Cp cmd -> if required (cmd land 0x7f) <= rem then cp d else refill decode_k d
+    | It len -> if len <= rem then it d else refill decode_k d )
 
   let decode d = match decode_k d with
     | Await -> `Await
@@ -399,8 +414,10 @@ module N = struct
 
       unsafe_set_uint8 s j (cmd lor 0x80) ;
       let pos = ref (j + 1) in
-      let off = ref off in while !off <> 0 do unsafe_set_uint8 s !pos !off ; incr pos ; off := !off asr 8 done ;
-      let len = ref len in while !len <> 0 do unsafe_set_uint8 s !pos !len ; incr pos ; len := !len asr 8 done ;
+      let off = ref off in
+      while !off <> 0 do if !off land 0xff != 0 then ( unsafe_set_uint8 s !pos !off ; incr pos ) ; off := !off asr 8 done ;
+      let len = ref len in
+      while !len <> 0 do if !len land 0xff != 0 then ( unsafe_set_uint8 s !pos !len ; incr pos ) ; len := !len asr 8 done ;
       k e
     | `Insert p ->
       let rem = o_rem e in

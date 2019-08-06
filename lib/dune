@@ -1,12 +1,12 @@
 (library
  (name dd)
  (modules dd)
- (libraries checkseum fmt))
+ (libraries checkseum fmt bigarray))
 
 (library
  (name h)
  (modules h)
- (libraries fmt))
+ (libraries fmt bigarray))
 
 (library
  (name zz)
