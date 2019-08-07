@@ -1,17 +1,17 @@
 (library
  (name dd)
- (public_name dd)
+ (public_name z.dd)
  (modules dd)
  (libraries checkseum fmt bigarray))
 
 (library
  (name h)
- (public_name h)
+ (public_name z.h)
  (modules h)
  (libraries fmt bigarray))
 
 (library
  (name zz)
- (public_name zz)
+ (public_name z.zz)
  (modules zz)
  (libraries dd))
