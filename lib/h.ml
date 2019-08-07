@@ -303,9 +303,7 @@ module M = struct
       d.src_len <- src_len ;
       d.dst_len <- dst_len ;
 
-      if d.src_len != bigstring_length d.source
-      then malformedf "Invalid source"
-      else ( d.s <- Postprocess ; Stop )
+      d.s <- Postprocess ; Stop
     | Postprocess -> Stop
     | Cmd -> cmd d
     | Cp cmd -> if required (cmd land 0x7f) <= rem then cp d else refill decode_k d
