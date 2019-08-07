@@ -6,18 +6,19 @@ val bigstring_empty : bigstring
 
 module M : sig
   type src = [ `Channel of in_channel | `Manual | `String of string ]
-  type decode = [ `Await | `Destination of int | `End | `Malformed of string ]
+  type decode = [ `Await | `Header of int * int | `End | `Malformed of string ]
 
   type decoder
 
   val src : decoder -> bigstring -> int -> int -> unit
   val dst : decoder -> bigstring -> int -> int -> unit
+  val source : decoder -> bigstring -> unit
 
   val src_rem : decoder -> int
   val dst_rem : decoder -> int
 
   val decode : decoder -> decode
-  val decoder : source:bigstring -> src -> decoder
+  val decoder : ?source:bigstring -> src -> decoder
 end
 
 module N : sig

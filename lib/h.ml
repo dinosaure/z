@@ -135,10 +135,10 @@ let ( <= ) (x : int) y = x <= y [@@inline]
 
 module M = struct
   type src = [ `Channel of in_channel | `Manual | `String of string ]
-  type decode = [ `Await | `Destination of int | `End | `Malformed of string ]
+  type decode = [ `Await | `Header of int * int | `End | `Malformed of string ]
 
   type decoder =
-    { source : bigstring
+    { mutable source : bigstring
     ; src : src
     ; mutable dst : bigstring
     ; mutable i : bigstring
@@ -149,7 +149,7 @@ module M = struct
     ; mutable dst_len : int
     ; mutable s : state }
   and ret = Await | Stop | End | Malformed of string
-  and state = Header | Dst | Cmd | Cp of int | It of int
+  and state = Header | Postprocess | Cmd | Cp of int | It of int
 
   let variable_length buf off top =
     let p = ref off in
@@ -173,7 +173,7 @@ module M = struct
   [@@inline]
 
   let src_rem = i_rem
-  let dst_rem d = d.dst_len - d.o_pos
+  let dst_rem d = bigstring_length d.dst - d.o_pos
 
   let malformedf fmt = Fmt.kstrf (fun s -> Malformed s) fmt
 
@@ -187,15 +187,23 @@ module M = struct
       ; d.i_len <- j + l - 1 )
 
   let dst d s j l = match d.s with
-    | Dst ->
+    | Postprocess ->
       if (j < 0 || l < 0 || j + l > bigstring_length s)
       then invalid_bounds j l
       else if l <> d.dst_len
       then Fmt.invalid_arg "Invalid destination"
       else ( d.dst <- s
            ; d.o_pos <- j
-           ; d.s <- Cmd )
+           ; if bigstring_length d.source == d.src_len then d.s <- Cmd )
     | _ -> Fmt.invalid_arg "Invalid call of dst"
+
+  let source d src = match d.s with
+    | Postprocess ->
+      if bigstring_length src <> d.src_len
+      then Fmt.invalid_arg "Invalid source"
+      else ( d.source <- src
+           ; if dst_rem d >= d.dst_len then d.s <- Cmd )
+    | _ -> Fmt.invalid_arg "Invalid call of source"
 
   (* get new input in [d.i] and [k]ontinue. *)
   let refill k d = match d.src with
@@ -297,19 +305,19 @@ module M = struct
 
       if d.src_len != bigstring_length d.source
       then malformedf "Invalid source"
-      else ( d.s <- Dst ; Stop )
-    | Dst -> Stop
+      else ( d.s <- Postprocess ; Stop )
+    | Postprocess -> Stop
     | Cmd -> cmd d
     | Cp cmd -> if required (cmd land 0x7f) <= rem then cp d else refill decode_k d
     | It len -> if len <= rem then it d else refill decode_k d )
 
   let decode d = match decode_k d with
     | Await -> `Await
-    | Stop -> `Destination d.dst_len
+    | Stop -> `Header (d.src_len, d.dst_len)
     | End -> `End
     | Malformed err -> `Malformed err
 
-  let decoder ~source src =
+  let decoder ?(source= bigstring_empty) src =
     let i, i_pos, i_len = match src with
       | `Manual -> bigstring_empty, 1, 0
       | `String x -> bigstring_of_string x, 0, String.length x - 1

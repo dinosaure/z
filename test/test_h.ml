@@ -15,11 +15,12 @@ let test_0 () =
       Buffer.add_string buf str ; go (N.encode encoder `Await) in
   let res = go (N.encode encoder `End) in
   Alcotest.(check string) "empty diff" res "\000\000" ;
-  let decoder = M.decoder ~source:bigstring_empty (`String res) in
+  let decoder = M.decoder (`String res) in
   let rec go () = match M.decode decoder with
-    | `Destination len ->
-      M.dst decoder bigstring_empty 0 0 ;
-      Alcotest.(check int) "dst len" 0 len ; go ()
+    | `Header (src_len, dst_len) ->
+      Alcotest.(check int) "src len" 0 src_len ;
+      Alcotest.(check int) "dst len" 0 dst_len ;
+      M.dst decoder bigstring_empty 0 0 ; go ()
     | `End -> ()
     | `Await -> Fmt.failwith "`Await"
     | `Malformed err -> failwith err in
@@ -34,13 +35,14 @@ let test_1 () =
   List.iter f [ `Insert "aaaa"; `End ] ;
   let res = Buffer.contents buf in
   Alcotest.(check string) "insert diff" res "\000\004\004aaaa" ;
-  let decoder = M.decoder ~source:bigstring_empty (`String res) in
+  let decoder = M.decoder (`String res) in
   let dst = ref bigstring_empty in
   let rec go () = match M.decode decoder with
-    | `Destination len ->
-      Alcotest.(check int) "dst len" 4 len ;
-      dst := Bigstringaf.create len ;
-      M.dst decoder !dst 0 len ; go ()
+    | `Header (src_len, dst_len) ->
+      Alcotest.(check int) "src len" 0 src_len ;
+      Alcotest.(check int) "dst len" 4 dst_len ;
+      dst := Bigstringaf.create dst_len ;
+      M.dst decoder !dst 0 dst_len ; go ()
     | `End -> Bigstringaf.to_string !dst
     | `Await -> Fmt.failwith "`Await"
     | `Malformed err -> failwith err in
@@ -59,10 +61,11 @@ let test_2 () =
   let decoder = M.decoder ~source:(Bigstringaf.of_string ~off:0 ~len:4 "aaaa") (`String res) in
   let dst = ref bigstring_empty in
   let rec go () = match M.decode decoder with
-    | `Destination len ->
-      Alcotest.(check int) "dst len" 4 len ;
-      dst := Bigstringaf.create len ;
-      M.dst decoder !dst 0 len ; go ()
+    | `Header (src_len, dst_len) ->
+      Alcotest.(check int) "src len" 4 src_len ;
+      Alcotest.(check int) "dst len" 4 dst_len ;
+      dst := Bigstringaf.create dst_len ;
+      M.dst decoder !dst 0 dst_len ; go ()
     | `End -> Bigstringaf.to_string !dst
     | `Await -> Fmt.failwith "`Await"
     | `Malformed err -> failwith err in

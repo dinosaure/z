@@ -31,7 +31,7 @@ let diff source target =
     delta ;
   match N.encode encoder `End with
   | `Ok -> ()
-  | `Partial -> assert false
+  | `Partial -> assert false (* XXX(dinosaure): never occur! *)
 
 let patch source patch =
   let source = load_filename source in
@@ -44,9 +44,10 @@ let patch source patch =
   let decoder = M.decoder ~source (`Channel ic) in
   let rec go () = match M.decode decoder with
     | `Await -> assert false
-    | `Destination len ->
-      dst := Bigstringaf.create len ;
-      M.dst decoder !dst 0 len ; go ()
+    | `Header (src_len, dst_len) ->
+      assert (src_len = Bigstringaf.length source) ;
+      dst := Bigstringaf.create dst_len ;
+      M.dst decoder !dst 0 dst_len ; go ()
     | `End ->
       assert (M.dst_rem decoder = 0) ;
       if patch <> `Stdin then close_in ic ;
