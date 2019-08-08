@@ -190,7 +190,7 @@ module M = struct
     | Postprocess ->
       if (j < 0 || l < 0 || j + l > bigstring_length s)
       then invalid_bounds j l
-      else if l <> d.dst_len
+      else if l < d.dst_len
       then Fmt.invalid_arg "Invalid destination"
       else ( d.dst <- s
            ; d.o_pos <- j
@@ -199,7 +199,7 @@ module M = struct
 
   let source d src = match d.s with
     | Postprocess ->
-      if bigstring_length src <> d.src_len
+      if bigstring_length src < d.src_len
       then Fmt.invalid_arg "Invalid source"
       else ( d.source <- src
            ; if dst_rem d >= d.dst_len then d.s <- Cmd )
