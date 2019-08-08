@@ -144,10 +144,14 @@ module M = struct
     ; mutable i : bigstring
     ; mutable i_pos : int
     ; mutable i_len : int
+    ; mutable t_len : int
+    ; mutable t_need : int
+    ; t_tmp : bigstring
     ; mutable o_pos : int
     ; mutable src_len : int
     ; mutable dst_len : int
-    ; mutable s : state }
+    ; mutable s : state
+    ; mutable k : decoder -> ret }
   and ret = Await | Stop | End | Malformed of string
   and state = Header | Postprocess | Cmd | Cp of int | It of int
 
@@ -176,6 +180,10 @@ module M = struct
   let dst_rem d = bigstring_length d.dst - d.o_pos
 
   let malformedf fmt = Fmt.kstrf (fun s -> Malformed s) fmt
+
+  let t_need d n =
+    d.t_len <- 0 ;
+    d.t_need <- n
 
   let src d s j l =
     if (j < 0 || l < 0 || j + l > bigstring_length s)
@@ -212,7 +220,19 @@ module M = struct
     | `Channel ic ->
       let res = input_bigstring ic d.i 0 (bigstring_length d.i) in
       src d d.i 0 res ; k d
-    | `Manual -> Await
+    | `Manual -> d.k <- k ; Await
+
+  let rec t_fill k d =
+    let blit d len =
+      unsafe_blit d.i d.i_pos d.t_tmp d.t_len len ;
+      d.i_pos <- d.i_pos + len ;
+      d.t_len <- d.t_len + len in
+    let rem = i_rem d in
+    if rem < 0 then k d
+    else
+      let need = d.t_need - d.t_len in
+      if rem < need then ( blit d rem ; refill (t_fill k) d )
+      else ( blit d need ; k d )
 
   let required =
     let a = [| 0; 1; 1; 2; 1; 2; 2; 3; 1; 2; 2; 3; 2; 3; 3; 4 |] in
@@ -223,58 +243,75 @@ module M = struct
     | It len -> i_rem d >= len
     | _ -> assert false (* XXX(dinosaure): [enough] is called only after a [d.s <- (It _ | Cp _)]. *)
 
+  let need d = match d.s with
+    | Cp cmd -> required (cmd land 0x7f)
+    | It len -> len
+    | _ -> assert false
+
   (* XXX(dinosaure): [flambda] is able to optimize [let rec a .. and b .. and c ..]
      instead [match .. with A -> .. | B -> .. | C -> ..]. *)
 
   let rec cp d =
     let[@warning "-8"] Cp command = d.s in
-    let p = ref d.i_pos in
+    let p = ref (if d.t_len > 0 then 0 else d.i_pos) in
+    let i = if d.t_len > 0 then d.t_tmp else d.i in
     let cp_off = ref 0 in
     let cp_len = ref 0 in
 
     if command land 0x01 != 0
-    then ( let v = unsafe_get_uint8 d.i !p in
+    then ( let v = unsafe_get_uint8 i !p in
            cp_off := v
          ; incr p ) ;
     if command land 0x02 != 0
-    then ( let v = unsafe_get_uint8 d.i !p in
+    then ( let v = unsafe_get_uint8 i !p in
            cp_off := !cp_off lor (v lsl 8)
          ; incr p ) ;
     if command land 0x04 != 0
-    then ( let v = unsafe_get_uint8 d.i !p in
+    then ( let v = unsafe_get_uint8 i !p in
            cp_off := !cp_off lor (v lsl 16)
          ; incr p ) ;
     if command land 0x08 != 0
-    then ( let v = unsafe_get_uint8 d.i !p in
+    then ( let v = unsafe_get_uint8 i !p in
            cp_off := !cp_off lor (v lsl 24)
          ; incr p ) ;
     if command land 0x10 != 0
-    then ( let v = unsafe_get_uint8 d.i !p in
+    then ( let v = unsafe_get_uint8 i !p in
            cp_len := v
          ; incr p ) ;
     if command land 0x20 != 0
-    then ( let v = unsafe_get_uint8 d.i !p in
+    then ( let v = unsafe_get_uint8 i !p in
            cp_len := !cp_len lor (v lsl 8)
          ; incr p ) ;
     if command land 0x40 != 0
-    then ( let v = unsafe_get_uint8 d.i !p in
+    then ( let v = unsafe_get_uint8 i !p in
            cp_len := !cp_len lor (v lsl 16)
          ; incr p ) ;
     if !cp_len == 0 then cp_len := 0x10000 ;
 
     blit d.source !cp_off d.dst d.o_pos !cp_len ;
-    d.i_pos <- !p ;
+    if d.t_len > 0 then d.t_len <- 0 else d.i_pos <- !p ;
     d.o_pos <- d.o_pos + !cp_len ;
     d.s <- Cmd ;
+    d.k <- decode_k ;
     decode_k d
 
   and it d =
     let[@warning "-8"] It len = d.s in
-    blit d.i d.i_pos d.dst d.o_pos len ;
-    d.i_pos <- d.i_pos + len ;
-    d.o_pos <- d.o_pos + len ;
-    d.s <- Cmd ;
-    decode_k d
+    if d.t_len > 0
+    then
+      ( blit d.t_tmp 0 d.dst d.o_pos len
+      ; d.t_len <- 0
+      ; d.o_pos <- d.o_pos + len
+      ; d.s <- Cmd
+      ; d.k <- decode_k
+      ; decode_k d )
+    else
+      ( blit d.i d.i_pos d.dst d.o_pos len
+      ; d.i_pos <- d.i_pos + len
+      ; d.o_pos <- d.o_pos + len
+      ; d.s <- Cmd
+      ; d.k <- decode_k
+      ; decode_k d )
 
   and cmd d =
     let c = unsafe_get_uint8 d.i d.i_pos in
@@ -286,7 +323,7 @@ module M = struct
 
       ; if enough d
         then ( if c land 0x80 != 0 then cp d else it d )
-        else refill cmd d )
+        else ( t_need d (need d) ; t_fill (if c land 0x80 != 0 then cp else it) d ) )
 
   and decode_k d =
     let rem = i_rem d in
@@ -299,6 +336,10 @@ module M = struct
       let x, src_len = variable_length d.i d.i_pos d.i_len in
       let y, dst_len = variable_length d.i (d.i_pos + x) d.i_len in
 
+      (* XXX(dinosaure): ok, this code can only work if the first given buffer
+         is large enough to store header. In the case of [carton], output buffer
+         of [zlib]/input buffer of [h] is [io_buffer_size]. *)
+
       d.i_pos <- d.i_pos + x + y ;
       d.src_len <- src_len ;
       d.dst_len <- dst_len ;
@@ -306,10 +347,16 @@ module M = struct
       d.s <- Postprocess ; Stop
     | Postprocess -> Stop
     | Cmd -> cmd d
-    | Cp cmd -> if required (cmd land 0x7f) <= rem then cp d else refill decode_k d
-    | It len -> if len <= rem then it d else refill decode_k d )
+    | Cp cmd ->
+      if required (cmd land 0x7f) <= rem
+      then cp d
+      else ( t_need d (need d) ; t_fill cp d )
+    | It len ->
+      if len <= rem
+      then it d
+      else ( t_need d (need d) ; t_fill it d ) )
 
-  let decode d = match decode_k d with
+  let decode d = match d.k d with
     | Await -> `Await
     | Stop -> `Header (d.src_len, d.dst_len)
     | End -> `End
@@ -326,10 +373,14 @@ module M = struct
     ; i
     ; i_pos
     ; i_len
+    ; t_len= 0
+    ; t_need= 0
+    ; t_tmp= bigstring_create 128
     ; o_pos= 0
     ; src_len= 0
     ; dst_len= 0
-    ; s= Header }
+    ; s= Header
+    ; k= decode_k }
 end
 
 module N = struct
