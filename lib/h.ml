@@ -12,9 +12,9 @@ let bigstring_create l = Bigarray.Array1.create Bigarray.char Bigarray.c_layout 
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_get_char : bigstring -> int -> char = "%caml_ba_ref_1"
-external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
+external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32"
 
-external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
+external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
 external unsafe_set_char : bigstring -> int -> char -> unit = "%caml_ba_set_1"
 

@@ -25,8 +25,8 @@ let unsafe_set_uint16 =
   then fun buf off v -> unsafe_set_uint16 buf off v
   else fun buf off v -> unsafe_set_uint16 buf off (swap v)
 
-external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
-external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
+external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32"
+external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32"
 
 external bytes_unsafe_set_uint32 : bytes -> int -> int32 -> unit = "%caml_bytes_set32"
 let bytes_unsafe_set_uint8 : bytes -> int -> int -> unit =

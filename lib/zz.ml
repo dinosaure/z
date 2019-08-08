@@ -9,11 +9,11 @@ let bigstring_length x = Bigarray.Array1.dim x [@@inline]
 
 external unsafe_get_uint8 : bigstring -> int -> int = "%caml_ba_ref_1"
 external unsafe_set_uint8 : bigstring -> int -> int -> unit = "%caml_ba_set_1"
-external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32u"
+external unsafe_set_uint32 : bigstring -> int -> int32 -> unit = "%caml_bigstring_set32"
 external unsafe_get_uint16 : bigstring -> int -> int = "%caml_bigstring_get16"
 external unsafe_set_uint16 : bigstring -> int -> int -> unit = "%caml_bigstring_set16"
 
-external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32u"
+external unsafe_get_uint32 : bigstring -> int -> int32 = "%caml_bigstring_get32"
 external swap16 : int -> int = "%bswap16"
 external swap32 : int32 -> int32 = "caml_int32_bswap"
 
@@ -253,7 +253,7 @@ module M = struct
     | Hd _ -> d
 
   let flush d = match d.dd with
-    | Hd _ -> Fmt.invalid_arg "Invalid state to flush"
+    | Hd _ -> d (* FIXME *)
     | Dd { state; _ } ->
       Dd.M.flush state ; d
 
