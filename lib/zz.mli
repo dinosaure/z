@@ -11,6 +11,7 @@ module M : sig
 
   val decoder : src -> o:bigstring -> allocate:(int -> window) -> decoder
   val decode : decoder -> decode
+  val reset : decoder -> decoder
 
   val src : decoder -> bigstring -> int -> int -> decoder
   val dst_rem : decoder -> int

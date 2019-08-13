@@ -34,6 +34,7 @@ module M : sig
 
   val decoder : src -> o:bigstring -> w:window -> decoder
   val decode : decoder -> decode
+  val reset : decoder -> unit
 
   val src : decoder -> bigstring -> int -> int -> unit
   val dst_rem : decoder -> int
