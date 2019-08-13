@@ -303,14 +303,12 @@ module M = struct
       ; d.t_len <- 0
       ; d.o_pos <- d.o_pos + len
       ; d.s <- Cmd
-      ; d.k <- decode_k
       ; decode_k d )
     else
       ( blit d.i d.i_pos d.dst d.o_pos len
       ; d.i_pos <- d.i_pos + len
       ; d.o_pos <- d.o_pos + len
       ; d.s <- Cmd
-      ; d.k <- decode_k
       ; decode_k d )
 
   and cmd d =
