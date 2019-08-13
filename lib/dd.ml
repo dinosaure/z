@@ -441,6 +441,9 @@ module Window = struct
   let from raw =
     { raw; w= 0; c= Checkseum.Adler32.default }
 
+  let reset t =
+    t.w <- 0 ; t.c <- Checkseum.Adler32.default
+
   let mask v = v land mask
   [@@inline]
 
@@ -1309,6 +1312,27 @@ module M = struct
     ; w= Window.from w
     ; s= Header
     ; k= decode_k }
+
+  let reset d =
+    let i, i_pos, i_len = match d.src with
+      | `Manual -> bigstring_empty, 1, 0
+      | `String x -> bigstring_of_string x, 0, String.length x - 1
+      | `Channel _ -> bigstring_create io_buffer_size, 1, 0 in
+    d.i <- i ;
+    d.i_pos <- i_pos ;
+    d.i_len <- i_len ;
+    d.hold <- 0 ;
+    d.bits <- 0 ;
+    d.last <- false ;
+    d.o_pos <- 0 ;
+    d.l <- 0 ;
+    d.d <- 0 ;
+    d.literal <- fixed_lit ;
+    d.distance <- fixed_dist ;
+    d.jump <- Length ;
+    d.s <- Header ;
+    d.k <- decode_k ;
+    Window.reset d.w
 end
 
 module T = struct

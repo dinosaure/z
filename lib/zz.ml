@@ -130,13 +130,13 @@ module M = struct
     ; fdict : bool
     ; flevel : int
     ; cinfo : int
+    ; allocate : int -> Dd.window
     ; k : decoder -> decode }
   and dd =
     | Dd of { state : Dd.M.decoder
             ; window : Dd.window
             ; o : Dd.bigstring }
-    | Hd of { allocate : int -> Dd.window
-            ; o : Dd.bigstring }
+    | Hd of { o : Dd.bigstring }
   and decode =
     [ `Await of decoder
     | `Flush of decoder
@@ -197,14 +197,14 @@ module M = struct
 
   let rec header d =
     let k d = match d.dd with
-      | Hd { allocate; o; } ->
+      | Hd { o; } ->
         let cmf = unsafe_get_uint16 d.i d.i_pos in
         let cm = cmf land 0b1111 in
         let cinfo = (cmf lsr 4) land 0b1111 in
         let flg = cmf lsr 8 in
         let fdict = (flg lsr 5) land 0b1 in
         let flevel = (flg lsr 6) land 0b11 in
-        let window = allocate (cinfo + 8) in
+        let window = d.allocate (cinfo + 8) in
         let state = Dd.M.decoder `Manual ~o ~w:window in
         let dd = Dd { state; window; o; } in
         if ((cmf land 0xff) lsl 8 + (cmf lsr 8)) mod 31 != 0
@@ -272,10 +272,30 @@ module M = struct
     ; src
     ; wr= 0
     ; hd= 0
-    ; dd= Hd { allocate; o; }
+    ; dd= Hd { o; }
     ; fdict= false
     ; flevel= 2
     ; cinfo= 8
+    ; allocate
+    ; k= decode }
+
+  let reset d =
+    let i, i_pos, i_len = match d.src with
+      | `Manual -> bigstring_empty, 1, 0
+      | `String x -> bigstring_of_string x, 0, String.length x - 1
+      | `Channel _ -> bigstring_create io_buffer_size, 1, 0 in
+    let o = match d.dd with
+      | Hd { o; } -> o
+      | Dd { o; _ } -> o in
+    { i; i_pos; i_len
+    ; src= d.src
+    ; wr= 0
+    ; hd= 0
+    ; dd= Hd { o; }
+    ; fdict= false
+    ; flevel= 2
+    ; cinfo= 8
+    ; allocate= d.allocate
     ; k= decode }
 end
 
