@@ -261,6 +261,8 @@ module M = struct
     | Hd _ -> Fmt.invalid_arg "Invalid state to know bytes remaining"
     | Dd { state; _ } -> Dd.M.dst_rem state
 
+  let src_rem d = i_rem d
+
   let write { wr; _ } = wr
 
   let decoder src ~o ~allocate =

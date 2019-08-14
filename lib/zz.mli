@@ -15,6 +15,7 @@ module M : sig
 
   val src : decoder -> bigstring -> int -> int -> decoder
   val dst_rem : decoder -> int
+  val src_rem : decoder -> int
   val write : decoder -> int
   val flush : decoder -> decoder
 end
