@@ -287,7 +287,7 @@ type window = bigstring
 
 let make_window ~bits =
   if bits >= 8 && bits <= 15 then bigstring_create (1 lsl 15)
-  else invalid_arg "bits MUST be between 8 and 15"
+  else Fmt.invalid_arg "bits MUST be between 8 and 15 (%d)" bits
 
 let ffs n =
   if n = 0 then Fmt.invalid_arg "ffs on 0"
