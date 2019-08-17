@@ -585,6 +585,9 @@ module M = struct
     ; mutable bits : int
     ; mutable last : bool
     ; o : bigstring
+    ; t : bigstring
+    ; mutable t_need : int
+    ; mutable t_len : int
     ; mutable o_pos : int
     ; mutable l : int (* literal / length *)
     ; mutable d : int (* distance *)
@@ -698,6 +701,21 @@ module M = struct
         ; d.hold <- d.hold lor (byte lsl d.bits)
         ; d.bits <- d.bits + 8
         ; if d.bits >= n then k d else c_peek_bits n k d )
+
+  let t_need d n =
+    d.t_len <- 0 ; d.t_need <- n
+
+  let rec t_fill k d =
+    let blit d len =
+      unsafe_blit d.i d.i_pos d.t d.t_len len ;
+      d.i_pos <- d.i_pos + len ;
+      d.t_len <- d.t_len + len in
+    let rem = i_rem d in
+    if rem < 0 then k d (* TODO *)
+    else
+      let need = d.t_need - d.t_len in
+      if rem < need then ( blit d rem ; refill (t_fill k) d )
+      else ( blit d need ; d.t_need <- 0 ; k d )
 
   let reverse_bits bits =
     let t =
@@ -1301,6 +1319,9 @@ module M = struct
     ; i_len
     ; o
     ; o_pos= 0
+    ; t= bigstring_create 10
+    ; t_need= 0
+    ; t_len= 0
     ; hold= 0
     ; bits= 0
     ; last= false
