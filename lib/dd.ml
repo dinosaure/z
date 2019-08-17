@@ -609,6 +609,7 @@ module M = struct
     | Inflate
     | Slow
     | Flat_header
+    | Dynamic_header
     | Flat
     | Checkseum
     | End_of_inflate
@@ -767,21 +768,6 @@ module M = struct
     let tbl_lit, max_lit = huffman LENS tbl_lit 0 288 in
     Lookup.make tbl_lit max_lit, Lookup.make tbl_dist 5
 
-  (* XXX(dinosaure): [d.hold] can stores a byte from input. In this case, if we
-     want a byte, we give [d.hold & 0xff]. Otherwise, we directly give byte from
-     [d.i]. *)
-  let hold_or_input d =
-    if d.bits >= 8
-    then ( d.hold <- d.hold lsr (d.bits mod 8)
-         ; d.bits <- (d.bits / 8) * 8
-         ; let v = d.hold land 0xff in
-           d.hold <- d.hold lsr 8
-         ; d.bits <- d.bits - 8
-         ; v )
-    else ( let v = unsafe_get_uint8 d.i d.i_pos in
-           d.i_pos <- d.i_pos + 1
-         ; v )
-
   let rec c_bytes n k d =
     let rem = i_rem d in
     if rem >= n then k d
@@ -818,19 +804,46 @@ module M = struct
 
   let flat_header d =
     let k d =
-      let len0 = hold_or_input d in
-      let len1 = hold_or_input d in
-      let nlen0 = hold_or_input d in
-      let nlen1 = hold_or_input d in
+      let t_pos = ref 0 in
+      let hold = ref d.hold in
+      let bits = ref d.bits in
+      let len = ref 0 and nlen = ref 0xffff in
 
-      let len = len0 lor (len1 lsl 8) in
-      let nlen = nlen0 lor (nlen1 lsl 8) in
+      let consume () =
+        if !bits < 8
+        then ( hold := ((unsafe_get_uint8 d.t !t_pos) lsl !bits) lor !hold
+             ; bits := !bits + 8
+             ; incr t_pos ) in
 
-      if nlen != 0xffff - len
+      consume () ;
+      len := !hold land 0xff ;
+      hold := !hold asr 8 ;
+      bits := !bits - 8 ;
+
+      consume () ;
+      len := ((!hold land 0xff) lsl 8) lor !len ;
+      hold := !hold asr 8 ;
+      bits := !bits - 8 ;
+
+      consume () ;
+      nlen := !hold land 0xff ;
+      hold := !hold asr 8 ;
+      bits := !bits - 8;
+
+      consume () ;
+      nlen := ((!hold land 0xff) lsl 8) lor !nlen ;
+      hold := !hold asr 8 ;
+      bits := !bits - 8 ;
+
+      if !nlen != 0xffff - !len
       then err_invalid_complement_of_length d
-      else ( d.hold <- 0 ; d.bits <- 0 ; d.l <- len ; d.s <- Flat ; flat d ) in
+      else ( d.hold <- 0 ; d.bits <- 0 ; d.l <- !len ; d.s <- Flat ; flat d ) in
+    let bits = d.bits in
+    d.bits <- (d.bits / 8) * 8 ;
+    d.hold <- d.hold asr (bits - d.bits) ;
     let required = 4 - (d.bits / 8) in
-    c_bytes required k d
+    d.s <- Flat_header ;
+    t_need d required ; t_fill k d
 
   let n_extra_lbits = Array.map Nativeint.of_int _extra_lbits
   let n_extra_dbits = Array.map Nativeint.of_int _extra_dbits
@@ -1193,7 +1206,7 @@ module M = struct
     let[@warning "-8"] Table { hlit; hdist; hclen; } = d.s in
     let hold = ref d.hold in
     let bits = ref d.bits in
-    let i_pos = ref d.i_pos in
+    let t_pos = ref 0 in
     let i = ref 0 in
 
     let res = Array.make 19 0 in
@@ -1201,9 +1214,9 @@ module M = struct
     while !i < hclen
     do
       if !bits < 3
-      then ( hold := !hold lor (unsafe_get_uint8 d.i !i_pos lsl !bits)
+      then ( hold := !hold lor (unsafe_get_uint8 d.t !t_pos lsl !bits)
            ; bits := !bits + 8
-           ; incr i_pos ) ;
+           ; incr t_pos ) ;
       let code = !hold land 0x7 in
       res.(zigzag.(!i)) <- code ;
       hold := !hold lsr 3 ;
@@ -1216,7 +1229,8 @@ module M = struct
 
       d.hold <- !hold ;
       d.bits <- !bits ;
-      d.i_pos <- !i_pos ;
+      (* assert (!t_pos == d.t_len) ; *)
+      d.t_len <- 0 ; d.t_need <- 0 ;
       d.s <- Inflate_table { t; l
                            ; r= Array.make (hlit + hdist) 0
                            ; h= (hlit, hdist, hclen) } ;
@@ -1230,6 +1244,14 @@ module M = struct
 
   let dynamic d =
     let l_header d =
+      let t_pos = ref 0 in
+
+      while d.t_len > 0 do
+        d.hold <- d.hold lor (unsafe_get_uint8 d.t !t_pos lsl d.bits) ;
+        d.bits <- d.bits + 8 ;
+        incr t_pos ; d.t_len <- d.t_len - 1 ;
+      done ;
+
       let hlit = (d.hold land 0x1f) + 257 in
       let hdist = ((d.hold land 0x3e0) lsr 5) + 1 in
       let hclen = ((d.hold land 0x3c00) lsr 10) + 4 in
@@ -1241,15 +1263,15 @@ module M = struct
       (* XXX(dinosaure): we ensure to have enough bytes to start to inflate
          huffman tree. *)
 
-      let rec k d =
+      let k d =
         let rem = i_rem d in
 
         if rem < 0 then err_unexpected_end_of_input d
-        else if (hclen * 3 - d.bits) // 8 > rem
-        then refill k d
-        else table d in
+        else ( t_need d ((hclen * 3 - d.bits) // 8) ; t_fill table d ) in
       k d in
-    c_peek_bits 14 l_header d
+    let required = (14 - d.bits) // 8 in
+    d.s <- Dynamic_header ;
+    t_need d required ; t_fill l_header d
 
   let decode_k d = match d.s with
     | Header ->
@@ -1271,22 +1293,15 @@ module M = struct
         d.k <- k ;
         k d in
       c_peek_bits 3 l_header d
-    | Table { hclen; _ } ->
-      (* XXX(dinosaure): not really the best design but it's work. *)
-      let rec k d =
-        let rem = i_rem d in
-
-        if rem < 0 then err_unexpected_end_of_input d
-        else if (hclen * 3 - d.bits) // 8 > rem
-        then refill k d
-        else table d in
-      k d
+    | Table _ ->
+      t_fill table d ;
     | Inflate_table _ -> d.k d
     | Inflate ->
       if i_rem d > 1
       then inflate d.literal d.distance d.jump d
       else ( d.s <- Slow ; slow_inflate d.literal d.distance d.jump d )
     | Slow -> d.k d
+    | Dynamic_header -> d.k d
     | Flat_header -> d.k d
     | Flat -> flat d
     | Checkseum -> d.k d
