@@ -1093,7 +1093,7 @@ module M = struct
       d.k <- slow_inflate lit dist !jump ; (* allocation *)
       d.s <- Slow ;
 
-      if i_rem d > 0 then Flush else ( match d.src with
+      if i_rem d > 0 then ( if d.o_pos == bigstring_length d.o then Flush else K ) else ( match d.src with
           | `String _ -> eoi d ; K
           (* XXX(dinosaure): [K] is required here mostly because the semantic of
              the hot-loop. If we reach end of input, we may have some trailing
