@@ -131,6 +131,9 @@ module M = struct
     ; flevel : int
     ; cinfo : int
     ; allocate : int -> Dd.window
+    ; t : bigstring
+    ; t_need : int
+    ; t_len : int
     ; k : decoder -> decode }
   and dd =
     | Dd of { state : Dd.M.decoder
@@ -180,20 +183,38 @@ module M = struct
 
   let flush k d = `Flush { d with k }
 
-  let rec checksum d =
+  let blit src ~src_off dst ~dst_off ~len =
+    let a = Bigarray.Array1.sub src src_off len in
+    let b = Bigarray.Array1.sub dst dst_off len in
+    Bigarray.Array1.blit a b
+
+  let rec t_fill k d =
+    let blit d len =
+      blit d.i ~src_off:d.i_pos d.t ~dst_off:d.t_len ~len ;
+      { d with i_pos= d.i_pos + len
+             ; t_len= d.t_len + len } in
+    let rem = i_rem d in
+    if rem < 0 then malformedf "Unexpected end of input"
+    else
+      let need = d.t_need - d.t_len in
+      if rem < need
+      then let d = blit d rem in refill (t_fill k) d
+      else let d = blit d need in k { d with t_need= 0 }
+
+  let t_need n d = { d with t_need= n }
+
+  let checksum d =
     let k d = match d.dd with
       | Dd { state; _ } ->
         let a = Dd.M.checksum state in
-        let b = unsafe_get_uint32 d.i d.i_pos in
+        let b = unsafe_get_uint32 d.t 0 in
 
         if Optint.to_int32 a = b (* FIXME: Optint.equal a (Optint.of_int32 b) bugs! *)
-        then `End { d with i_pos= d.i_pos + 4 }
+        then `End d
         else err_invalid_checksum a b d
       | Hd _ -> assert false in
 
-    if i_rem d >= 4
-    then k d
-    else ( if i_rem d < 0 then err_unexpected_end_of_input d else refill checksum d )
+    t_fill k (t_need 4 d)
 
   let rec header d =
     let k d = match d.dd with
@@ -279,6 +300,9 @@ module M = struct
     ; flevel= 2
     ; cinfo= 8
     ; allocate
+    ; t= bigstring_create 4
+    ; t_need= 0
+    ; t_len= 0
     ; k= decode }
 
   let reset d =
@@ -298,6 +322,9 @@ module M = struct
     ; flevel= 2
     ; cinfo= 8
     ; allocate= d.allocate
+    ; t= d.t
+    ; t_need= 0
+    ; t_len= 0
     ; k= decode }
 end
 
