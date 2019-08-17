@@ -250,11 +250,14 @@ module M = struct
         let len = bigstring_length o - Dd.M.dst_rem state in
         (* XXX(dinosaure): protect counter to a recall? TODO *)
         `Flush { d with wr= d.wr + len }
-      | `Await -> refill decode d
+      | `Await ->
+        let len = i_rem d - Dd.M.src_rem state in
+        refill decode { d with i_pos= d.i_pos + len }
       | `End ->
         let len = bigstring_length o - Dd.M.dst_rem state in
         if len > 0
-        then flush checksum { d with wr= d.wr + len }
+        then flush checksum { d with i_pos= d.i_pos + (i_rem d - Dd.M.src_rem state)
+                                   ; wr= d.wr + len }
         else checksum { d with i_pos= d.i_pos + (i_rem d - Dd.M.src_rem state) }
       | `Malformed err -> `Malformed err
 
