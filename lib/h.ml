@@ -178,6 +178,8 @@ module M = struct
 
   let src_rem = i_rem
   let dst_rem d = bigstring_length d.dst - d.o_pos
+  let src_len { src_len; _ } = src_len
+  let dst_len { dst_len; _ } = dst_len
 
   let malformedf fmt = Fmt.kstrf (fun s -> Malformed s) fmt
 

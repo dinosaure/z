@@ -16,6 +16,8 @@ module M : sig
 
   val src_rem : decoder -> int
   val dst_rem : decoder -> int
+  val src_len : decoder -> int
+  val dst_len : decoder -> int
 
   val decode : decoder -> decode
   val decoder : ?source:bigstring -> src -> decoder
