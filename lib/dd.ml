@@ -611,7 +611,6 @@ module M = struct
     | Flat_header
     | Dynamic_header
     | Flat
-    | Checkseum
     | End_of_inflate
   and jump = Length | Extra_length | Distance | Extra_distance | Write
   and ret = Await | Flush | End | K | Malformed of string
@@ -789,7 +788,7 @@ module M = struct
 
     if d.l == 0
     then ( if d.last
-           then ( d.s <- End_of_inflate ; End )
+           then ( d.s <- End_of_inflate ; K )
            else ( d.s <- Header ; K ) )
     else match i_rem d, bigstring_length d.o - d.o_pos with
       | 0, _ ->
@@ -1304,7 +1303,6 @@ module M = struct
     | Dynamic_header -> d.k d
     | Flat_header -> d.k d
     | Flat -> flat d
-    | Checkseum -> d.k d
     | End_of_inflate ->
       Window.tail d.w ;
 
