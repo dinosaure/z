@@ -1103,7 +1103,7 @@ module M = struct
           | `Channel ic ->
             let len = input_bigstring ic d.i 0 (bigstring_length d.i) in
             src d d.i 0 len ; K (* XXX(dinosaure): should work fine! But it needs check. *)
-          | `Manual -> Await )
+          | `Manual -> K (* FIXME *) )
     with End ->
       d.hold <- Nativeint.to_int !hold ;
       d.bits <- !bits ;
