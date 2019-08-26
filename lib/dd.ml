@@ -952,7 +952,10 @@ module M = struct
         K in
       c_peek_bits len k d
     | Write ->
-      if d.d > Window.have d.w
+      (* XXX(dinosaure): a distance can not be equal to [0], in this case, we
+         reach an invalid distance code (eg. [_base_dist.({30,31})]). We should
+         return a better error message than [invalid_distance]. *)
+      if d.d > Window.have d.w || d.d == 0
       then err_invalid_distance d
       else
         let len = min d.l (bigstring_length d.o - d.o_pos) in
@@ -1059,11 +1062,14 @@ module M = struct
 
           jump := Write
         | Write ->
-          if d.d > Window.have d.w then raise_notrace Invalid_distance ;
+          if d.d > Window.have d.w || d.d == 0 then raise_notrace Invalid_distance ;
 
-          (* if d.d > Window.have d.w then raise Invalid_distance ;
-             XXX(dinosaure): [Window.have] does not tell me the truth where
-             we need a read cursor in [Window.t] for that. *)
+          (* XXX(dinosaure): [Window.have] does not tell me the truth where we
+             need a read cursor in [Window.t] for that.
+
+             XXX(dinosaure): A distance can not be equal to [0], in this case,
+             we reach an invalid distance code (eg. [_base_dist.({30,31})]). We
+             should return a better error message than [invalid_distance]. *)
 
           let len = min d.l (bigstring_length d.o - !o_pos) in
           let off = Window.mask (d.w.Window.w - d.d) in

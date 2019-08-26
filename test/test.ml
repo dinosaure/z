@@ -132,8 +132,7 @@ let invalid_distance_code () =
   Alcotest.test_case "invalid distance code" `Quick @@ fun () ->
   let decoder = M.decoder (`String "\x02\x7e\xff\xff") ~o ~w in
   Alcotest.(check decode) "invalid distance code"
-    (M.decode decoder) `Flush ;
-  Fmt.epr "dst_rem: %d.\n%!" (M.dst_rem decoder) ;
+    (M.decode decoder) (`Malformed "Invalid distance") ;
   Alcotest.(check string) "non-corrupted output"
     "" (Bigstringaf.substring o ~off:0 ~len:(Bigstringaf.length o - M.dst_rem decoder))
 (* XXX(dinosaure): see [M.base_dist]'s comment about this behavior. *)
@@ -141,8 +140,6 @@ let invalid_distance_code () =
 let invalid_distance_too_far_back () =
   Alcotest.test_case "invalid distance too far back" `Quick @@ fun () ->
   let decoder = M.decoder (`String "\x0c\xc0\x81\x00\x00\x00\x00\x00\x90\xff\x6b\x04\x00") ~o ~w in
-  Alcotest.(check decode) "invalid distance too far back"
-    (M.decode decoder) `Flush ;
   Alcotest.(check decode) "invalid distance too far back"
     (M.decode decoder) (`Malformed "Invalid distance")
 
