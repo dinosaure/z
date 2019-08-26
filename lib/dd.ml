@@ -476,7 +476,7 @@ module Window = struct
          ; update t
          ; blit2 w (w_off + pre) t.raw 0 o (o_off + pre) rst )
     else ( blit2 w w_off t.raw msk o o_off len
-         ; if mask (t.w + len) == 0 then update t ) ;
+         ; if mask (t.w + len) == 0 && len > 0 then update t ) ;
     t.w <- t.w + len
 
   let fill t v o o_off len =
@@ -488,7 +488,7 @@ module Window = struct
          ; update t
          ; fill2 v t.raw 0 o (o_off + pre) rst )
     else ( fill2 v t.raw msk o o_off len
-         ; if mask (t.w + len) == 0 then update t ) ;
+         ; if mask (t.w + len) == 0 && len > 0 then update t ) ;
     t.w <- t.w + len
 
   let tail w =
@@ -2464,7 +2464,7 @@ module W = struct
            ; update t
            ; unsafe_blit buf (off + pre) t.raw 0 rst )
       else ( unsafe_blit buf off t.raw msk len
-           ; if mask (t.w + len) == 0 then update t ) ) ;
+           ; if mask (t.w + len) == 0 && len > 0 then update t ) ) ;
     t.w <- t.w + len
 
   let junk t len = t.r <- t.r + len

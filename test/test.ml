@@ -1048,6 +1048,37 @@ let test_corpus_with_zlib filename =
   let ic = open_in Filename.(concat "corpus" filename) in
   zlib_compress_and_uncompress ic ; close_in ic
 
+let git_object () =
+  (* XXX(dinosaure): Flat DEFLATE block where inputs.(0) must not do a [Window.update]. *)
+  Alcotest.test_case "git object" `Quick @@ fun () ->
+  let inputs =
+    [ "\x78\x01\x01\x1e\x00\xe1\xff"
+    ; "\x9d\x02\x9d\x02\x90\xad\x14\x72\xb9\xb4\x44\x59\x5d\x21\x05\xb7\
+       \x34\x4f\x64\xe9\xa8\x5a\x3e\xd9\x91\x1f\x44\x91\xc1\x5c\xbd\xe5\
+       \x0c\xd1" ] in
+  let decoder = Zz.M.decoder (`String (String.concat "" inputs)) ~o ~allocate:(fun _ -> w) in
+  let rec go decoder = match Zz.M.decode decoder with
+    | `Await _ -> assert false | `Flush decoder -> go (Zz.M.flush decoder) | `Malformed err -> failwith err | `End _ -> () in
+  go decoder ;
+  let[@warning "-8"] [ i0; i1; ] = List.map (fun x -> Bigstringaf.of_string ~off:0 ~len:(String.length x) x) inputs in
+  let decoder = Zz.M.decoder `Manual ~o ~allocate:(fun _ -> w) in
+  let decoder = Zz.M.src decoder i0 0 (Bigstringaf.length i0) in
+  let rec go_i0 decoder = match Zz.M.decode decoder with
+    | `Await decoder ->
+      let decoder = Zz.M.src decoder i1 0 (Bigstringaf.length i1) in
+      go_i1 decoder
+    | `Flush decoder ->
+      let decoder = Zz.M.flush decoder in
+      go_i0 decoder
+    | `Malformed err -> failwith err
+    | `End _ -> Fmt.failwith "Unexpected end of flow"
+  and go_i1 decoder = match Zz.M.decode decoder with
+    | `Await _ -> Fmt.failwith "Unexpected `Await case"
+    | `Flush decoder -> let decoder = Zz.M.flush decoder in go_i1 decoder
+    | `Malformed err -> failwith err
+    | `End _ -> () in
+  go_i0 decoder
+
 let () =
   Alcotest.run "z"
     [ "invalids", [ invalid_complement_of_length ()
@@ -1131,4 +1162,5 @@ let () =
               ; test_corpus_with_zlib "progl"
               ; test_corpus_with_zlib "progp"
               ; test_corpus_with_zlib "trans" ]
-    ; "hang", [ hang0 () ] ]
+    ; "hang", [ hang0 () ]
+    ; "git", [ git_object () ] ]
